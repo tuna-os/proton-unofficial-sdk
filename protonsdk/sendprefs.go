@@ -1,4 +1,4 @@
-package main
+package protonsdk
 
 // Per-recipient send preferences, ported from Proton Mail Bridge
 // (internal/services/smtp/smtp_prefs.go, GPL-3.0-or-later): the same

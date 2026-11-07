@@ -1,4 +1,4 @@
-package main
+package protonsdk
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 func codeOf(t *testing.T, raw string) string {
 	t.Helper()
 	var out bytes.Buffer
-	run(strings.NewReader(raw), &out)
+	Serve(strings.NewReader(raw), &out)
 	var decoded struct {
 		Version int `json:"version"`
 		Error   struct {
@@ -20,8 +20,8 @@ func codeOf(t *testing.T, raw string) string {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("helper did not emit an envelope: %v", err)
 	}
-	if decoded.Version != protocolVersion {
-		t.Fatalf("envelope version = %d, want %d", decoded.Version, protocolVersion)
+	if decoded.Version != ProtocolVersion {
+		t.Fatalf("envelope version = %d, want %d", decoded.Version, ProtocolVersion)
 	}
 	return decoded.Error.Code
 }
@@ -79,14 +79,14 @@ func TestIncompatibleVersionNeverConnects(t *testing.T) {
 }
 
 func TestOversizedInputIsRejected(t *testing.T) {
-	if got := codeOf(t, `{"version":1,"op":"sync","pad":"`+strings.Repeat("x", maxRequestBytes)+`"}`); got != "invalid_request" {
+	if got := codeOf(t, `{"version":1,"op":"sync","pad":"`+strings.Repeat("x", MaxRequestBytes)+`"}`); got != "invalid_request" {
 		t.Fatalf("code = %q, want invalid_request", got)
 	}
 }
 
 func TestReplyIsOneLine(t *testing.T) {
 	var out bytes.Buffer
-	run(strings.NewReader("  \n"+`{"version":1,"op":"sync"}`+"\n"), &out)
+	Serve(strings.NewReader("  \n"+`{"version":1,"op":"sync"}`+"\n"), &out)
 	if lines := strings.Count(out.String(), "\n"); lines != 1 {
 		t.Fatalf("reply has %d lines, want exactly one", lines)
 	}

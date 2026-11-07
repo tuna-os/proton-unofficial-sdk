@@ -1,4 +1,4 @@
-package main
+package protonsdk
 
 import (
 	"bytes"
@@ -233,7 +233,7 @@ func call(t *testing.T, request map[string]any) map[string]any {
 
 func callWithin(t *testing.T, budget time.Duration, request map[string]any) map[string]any {
 	t.Helper()
-	request["version"] = protocolVersion
+	request["version"] = ProtocolVersion
 	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func callWithin(t *testing.T, budget time.Duration, request map[string]any) map[
 	if err := json.Unmarshal(out.Bytes(), &reply); err != nil {
 		t.Fatalf("reply is not JSON: %v", err)
 	}
-	if reply["version"] != float64(protocolVersion) {
+	if reply["version"] != float64(ProtocolVersion) {
 		t.Fatalf("reply version = %v", reply["version"])
 	}
 	return reply

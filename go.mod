@@ -1,4 +1,4 @@
-module hylki-proton
+module github.com/tuna-os/proton-unofficial-sdk
 
 go 1.26.1
 

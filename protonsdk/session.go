@@ -1,4 +1,4 @@
-package main
+package protonsdk
 
 import (
 	"bytes"
@@ -131,7 +131,7 @@ func (s *apiSession) ok(result map[string]any) envelope {
 // fail returns an error envelope; the session rides along so a rotation
 // that happened before the failure is not lost.
 func (s *apiSession) fail(code string) envelope {
-	return envelope{Version: protocolVersion, Error: &codedError{Code: code, Session: s.current()}}
+	return envelope{Version: ProtocolVersion, Error: &codedError{Code: code, Session: s.current()}}
 }
 
 // failErr classifies err into the fixed vocabulary, then fails with it.

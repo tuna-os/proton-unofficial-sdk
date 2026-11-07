@@ -1,9 +1,7 @@
-package main
+package protonsdk
 
 import (
 	"context"
-	"errors"
-	"net/http"
 
 	proton "github.com/ProtonMail/go-proton-api"
 )
@@ -15,9 +13,6 @@ const pageSize = 150
 // per page. Past this size the walk would not fit the operation budget, so
 // all_ids is null (no snapshot) rather than a timeout.
 const maxSnapshot = 10_000
-
-// Event pages: GetEvent already chains up to 50 events per call.
-const maxEventRounds = 10
 
 type syncParams struct {
 	envelopeFields
@@ -258,59 +253,19 @@ func (s *apiSession) window(ctx context.Context, label string, offset, limit int
 // id the server no longer knows, or a refresh the server demands, comes back
 // as refresh: the caller resyncs from scratch from the returned event id.
 func (s *apiSession) changes(ctx context.Context, since string) (map[string]any, string, error) {
-	type change struct{ deleted bool }
-	order := []string{}
-	seen := map[string]*change{}
-	refresh, more := false, false
-	eventID := since
-	for range maxEventRounds {
-		events, pending, err := s.client.GetEvent(ctx, eventID)
-		if err != nil {
-			if !staleEvent(err) || s.wasDeauthed() {
-				return nil, "", err
-			}
-			latest, err := s.client.GetLatestEventID(ctx)
-			if err != nil {
-				return nil, "", err
-			}
-			return refreshChanges(), latest, nil
+	var log messageLog
+	eventID, refresh, more, err := s.walkEvents(ctx, since, func(event proton.Event) {
+		for _, item := range event.Messages {
+			log.add(item)
 		}
-		for _, event := range events {
-			if event.EventID != "" {
-				eventID = event.EventID
-			}
-			if event.Refresh&proton.RefreshMail != 0 {
-				refresh = true
-			}
-			for _, item := range event.Messages {
-				if !validID(item.ID) {
-					continue
-				}
-				entry, ok := seen[item.ID]
-				if !ok {
-					entry = &change{}
-					seen[item.ID] = entry
-					order = append(order, item.ID)
-				}
-				entry.deleted = item.Action == proton.EventDelete
-			}
-		}
-		more = pending
-		if !pending {
-			break
-		}
+	})
+	if err != nil {
+		return nil, "", err
 	}
 	if refresh {
 		return refreshChanges(), eventID, nil
 	}
-	var deleted, changed []string
-	for _, id := range order {
-		if seen[id].deleted {
-			deleted = append(deleted, id)
-		} else {
-			changed = append(changed, id)
-		}
-	}
+	deleted, changed := log.split()
 	updated := []map[string]any{}
 	found := map[string]bool{}
 	for start := 0; start < len(changed); start += pageSize {
@@ -338,21 +293,6 @@ func (s *apiSession) changes(ctx context.Context, since string) (map[string]any,
 
 func refreshChanges() map[string]any {
 	return map[string]any{"refresh": true, "more": false, "deleted": []string{}, "updated": []map[string]any{}}
-}
-
-// staleEvent reports whether the server refused the event id itself (too
-// old, unknown) rather than failing the request: a client error that is not
-// about authentication or throttling.
-func staleEvent(err error) bool {
-	var apiErr *proton.APIError
-	if !errors.As(err, &apiErr) {
-		return false
-	}
-	switch apiErr.Status {
-	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity:
-		return true
-	}
-	return false
 }
 
 // headerRow is the Tuta helper's header shape plus what Proton's metadata
