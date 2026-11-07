@@ -27,7 +27,7 @@ reply out, usable three ways:
 > account](#watching-an-account)), don't bulk-process mailboxes, and expect
 > that Proton can change or close the API at any time.
 
-The current release is 0.1.1. The protocol follows the needs of its
+The current release is 0.1.2. The protocol follows the needs of its
 first two users, Hylki's Proton support and the Tuna Mail Android app, and
 may still change; the envelope's `version` field guards incompatible
 changes.
@@ -41,6 +41,8 @@ changes.
 - Folder, label and message-header sync with stable keyset paging, an id
   snapshot for reconciliation, and incremental changes from Proton's event
   log.
+- Server-side search over message metadata: sender, recipient, subject or
+  keyword, folder or label, date range, unread and starred.
 - A cheap `events` poll naming the folders and messages that changed, for
   watching an account.
 - Decrypted messages as finished RFC 5322 bytes, attachments included, the
@@ -129,7 +131,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("org.tunaos.proton:proton-sdk-android:0.1.1")
+    implementation("org.tunaos.proton:proton-sdk-android:0.1.2")
 }
 ```
 
@@ -152,6 +154,7 @@ val account = try {
 // Later runs: client.account(ProtonSession(storedJson), store)
 val inbox = account.sync(limit = 50)
 val mime: ByteArray = account.message(inbox.messages.first().id).mime
+val unread = account.search(ProtonSearchQuery(sender = "ada@example.com", isUnread = true), limit = 50)
 account.watch(since = inbox.eventId).collect { event -> /* resync what it names */ }
 ```
 
@@ -358,6 +361,60 @@ created or changed since, re-read rather than taken from a partial event.
 `refresh: true` — the server demanded a resync, or no longer knows `since`
 — means discard the deltas and sync from scratch; `event_id` is then the
 current one.
+
+### `search`
+
+Request: `session`, `limit` (1–150, required), at least one criterion,
+optional `folder` (a folder or label id as `sync` lists it, default `"5"` =
+All Mail) and optional `cursor` (a `next_cursor` from an earlier search with
+the same criteria).
+
+| criterion    | matches                                                        |
+|--------------|----------------------------------------------------------------|
+| `keyword`    | the subject, the sender, or any To/Cc/Bcc recipient (name or address) |
+| `subject`    | the subject                                                    |
+| `sender`     | the sender's name or address                                   |
+| `recipient`  | any To, Cc or Bcc recipient's name or address                  |
+| `after_ms`   | sent at or after this epoch-millisecond instant                |
+| `before_ms`  | sent before this epoch-millisecond instant                     |
+| `is_unread`  | read state                                                     |
+| `is_starred` | star                                                           |
+
+A message must match every criterion given. Text criteria are trimmed,
+1–256 characters without control characters, and match as
+case-insensitive substrings. A request without a criterion, with a bad
+one, or with `after_ms` ≥ `before_ms` is `invalid_request`; a bad `limit`
+is `invalid_page`; an unknown folder is `folder_not_found`.
+
+Result: `messages` (header rows as `sync` returns them, newest first) and
+`next_cursor`, plus `session`. A `next_cursor` that is not `null` means
+the folder was not searched to its end: pass it as `cursor` to go on. A
+call stops at `limit` hits or after reading 20 pages of 150 messages, so it
+can return fewer hits than `limit` — even none — with a cursor; only a
+`null` cursor means there is nothing more to find.
+
+How it searches: the folder is listed newest-first by keyset, like `sync`,
+with the criteria passed to Proton's own search parameters (`Keyword`,
+`From`, `Recipients`, `Begin`, `End`, `Unread`, `Starred`, as Proton's web
+client sends them; a `subject` goes as `Keyword` when no `keyword` is
+given). Every listed message is then re-checked against the criteria on its
+metadata, so a hit means the same whatever the server did with them. The
+server applies them its own way, which Proton does not document and which
+may find less than a substring would; where it does, the narrower match is
+the one that applies. The server-side matching has not yet been checked
+against a live account. go-proton-api's test server ignores these
+parameters, so the tests check that they are sent and that the re-check
+alone gives the right hits.
+
+What can and cannot be searched: subject, sender, recipients, date, read
+state, star and labels are metadata Proton's servers hold readable, which is
+why they can be searched there. **Message bodies and attachment contents**
+are end-to-end encrypted, so the server cannot search them, and this
+library does not download and decrypt mail to search it. Proton's own apps
+search content by building an encrypted index on the device; a client that
+wants body search has to do the same from the messages it has fetched.
+Other headers (Message-ID, Reply-To, List-Id) are not search criteria
+either.
 
 ### `events`
 
@@ -703,7 +760,8 @@ go build -mod=vendor -trimpath -o proton-helper ./cmd/proton-helper
 The tests run go-proton-api's own in-process API server
 (`github.com/ProtonMail/go-proton-api/server`) behind a reverse proxy the
 tests control, and drive the library through its real framing: login →
-sync (pages, cursor, snapshot, events) → events polls → message decrypt →
+sync (pages, cursor, snapshot, events) → search (every criterion, cursor
+paging, the parameters sent) → events polls → message decrypt →
 mark_read → move → send to Proton recipients (whose copies are then
 decrypted from their own accounts), to a cleartext outsider and to a PGP
 outsider (whose package is opened with the recipient's key), replies and
@@ -789,6 +847,8 @@ Hylki builds the helper from a submodule, offline, from `vendor/`:
   implemented; `secure` delivery refuses such recipients instead.
 - `all_ids` is skipped past 10 000 messages to stay inside the budget; use
   `since` for incremental sync.
+- `search` covers metadata only; bodies and attachments are end-to-end
+  encrypted (see `search`).
 - Not yet validated against a live account.
 
 ## License
