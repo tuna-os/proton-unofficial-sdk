@@ -4,6 +4,19 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
+## [0.1.2] - 2026-11-07
+
+### Added
+
+- `search`: server-side search over message metadata — keyword, subject,
+  sender, recipient, a date range, unread and starred — in a folder or
+  label (All Mail by default), paged by cursor. The criteria go to
+  Proton's own search parameters and every hit is re-checked on its
+  metadata. Bodies and attachments are end-to-end encrypted and cannot be
+  searched; the README says what can.
+- Kotlin: `ProtonAccount.search` with `ProtonSearchQuery` and
+  `ProtonSearchResult`.
+
 ## [0.1.1] - 2026-11-07
 
 ### Added
