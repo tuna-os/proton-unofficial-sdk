@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  # Tuna Mail's NDK and minSdk (tuna-os/thunderbird-android).
+  # Tuna Mail's NDK and minSdk (tuna-os/tuna-mail).
   NDK_VERSION: 28.2.13676358
   ANDROID_API: 24
 

@@ -1,4 +1,4 @@
-# Versions follow the Tuna Mail app (tuna-os/thunderbird-android), the
+# Versions follow the Tuna Mail app (tuna-os/tuna-mail), the
 # wrapper's first consumer, so the two resolve to the same libraries.
 [versions]
 androidGradlePlugin = "9.5.0"

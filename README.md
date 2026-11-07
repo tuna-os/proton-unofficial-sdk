@@ -773,7 +773,7 @@ No test talks to the real Proton API.
 ### The Android library
 
 Two steps, both in the [Tuna Mail build
-image](https://github.com/tuna-os/thunderbird-android/tree/main/tools/build-env)
+image](https://github.com/tuna-os/tuna-mail/tree/main/tools/build-env)
 (JDK 21, Android SDK 37, NDK 28.2, Go 1.26, gomobile), or anywhere with the
 same tools:
 
