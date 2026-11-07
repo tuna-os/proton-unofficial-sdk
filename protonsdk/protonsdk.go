@@ -1,8 +1,8 @@
 // Package protonsdk is an unofficial Proton Mail client: SRP login with
 // TOTP and human verification, folder/label sync with event-based
-// increments, decrypted RFC 5322 messages, read and star state, moves,
-// end-to-end encrypted sending and server-side logout, all over Proton's
-// own go-proton-api and gopenpgp.
+// increments, metadata search, decrypted RFC 5322 messages, read and star
+// state, moves, end-to-end encrypted sending and server-side logout, all
+// over Proton's own go-proton-api and gopenpgp.
 //
 // The whole API is one JSON request in, one versioned JSON envelope out:
 // {"version":1,"result":{...}} or {"version":1,"error":{"code":"..."}}.
@@ -74,6 +74,7 @@ type handler func(ctx context.Context, raw []byte) envelope
 var operations = map[string]handler{
 	"login":         login,
 	"sync":          syncOp,
+	"search":        searchOp,
 	"events":        eventsOp,
 	"message":       messageOp,
 	"mark_read":     markReadOp,
