@@ -1,3 +1,8 @@
 /proton-helper
 /hylki-proton
 /build/
+/android/.gradle/
+/android/build/
+/android/proton-sdk-android/build/
+/android/local.properties
+/android/.kotlin/
