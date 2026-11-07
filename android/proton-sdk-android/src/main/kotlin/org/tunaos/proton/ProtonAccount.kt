@@ -65,6 +65,27 @@ public class ProtonAccount internal constructor(
         },
     )
 
+    /**
+     * Searches message metadata for [query], at most [limit] (1–150) hits
+     * per call. A call may return fewer hits, even none, with a
+     * [ProtonSearchResult.nextCursor]: pass it as [cursor] to search on.
+     */
+    public suspend fun search(query: ProtonSearchQuery, limit: Int, cursor: String? = null): ProtonSearchResult = decode(
+        call("search") {
+            put("limit", limit)
+            query.folder?.let { put("folder", it) }
+            query.keyword?.let { put("keyword", it) }
+            query.subject?.let { put("subject", it) }
+            query.sender?.let { put("sender", it) }
+            query.recipient?.let { put("recipient", it) }
+            query.afterMs?.let { put("after_ms", it) }
+            query.beforeMs?.let { put("before_ms", it) }
+            query.isUnread?.let { put("is_unread", it) }
+            query.isStarred?.let { put("is_starred", it) }
+            cursor?.let { put("cursor", it) }
+        },
+    )
+
     /** What changed since [since] (an event id from `sync` or a previous poll). */
     public suspend fun events(since: String): ProtonEvents = decode(call("events") { put("since", since) })
 

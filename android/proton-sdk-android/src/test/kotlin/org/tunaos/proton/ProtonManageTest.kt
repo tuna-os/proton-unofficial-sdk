@@ -7,6 +7,7 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -120,6 +121,40 @@ class ProtonManageTest {
         assertNull(label.requests.single()["parent"])
 
         assertFailsWith<IllegalArgumentException> { account(FakeTransport()).createFolder("x", ProtonFolderKind.SYSTEM) }
+    }
+
+    @Test
+    fun searchSendsOnlyTheGivenCriteria() = runTest {
+        val header = """{"id":"m7","subject":"Invoice","date_ms":1762500000000,"sender":{"name":"Ada","address":"ada@example.com"},
+            "recipient":null,"is_unread":true,"confidential":false,"label_ids":["0","5"]}"""
+        val transport = FakeTransport(
+            ok(""""messages":[$header],"next_cursor":"m7""""),
+            ok(""""messages":[],"next_cursor":null"""),
+        )
+        val store = RecordingStore()
+        val account = account(transport, store)
+        val query = ProtonSearchQuery(sender = "ada", afterMs = 1_762_000_000_000, isUnread = true, folder = "0")
+
+        val first = account.search(query, limit = 20)
+        val second = account.search(ProtonSearchQuery(keyword = "invoice"), limit = 20, cursor = first.nextCursor)
+
+        assertEquals("m7", first.messages.single().id)
+        assertEquals("m7", first.nextCursor)
+        assertTrue(second.messages.isEmpty())
+        assertNull(second.nextCursor)
+        assertEquals(2, store.saved.size)
+
+        val (byCriteria, byKeyword) = transport.requests
+        assertEquals("search", byCriteria.getValue("op").jsonPrimitive.content)
+        assertEquals(
+            setOf("version", "op", "session", "limit", "folder", "sender", "after_ms", "is_unread"),
+            byCriteria.keys,
+        )
+        assertEquals("ada", byCriteria.getValue("sender").jsonPrimitive.content)
+        assertEquals(1_762_000_000_000, byCriteria.getValue("after_ms").jsonPrimitive.long)
+        assertTrue(byCriteria.getValue("is_unread").jsonPrimitive.boolean)
+        assertEquals(setOf("version", "op", "session", "limit", "keyword", "cursor"), byKeyword.keys)
+        assertEquals("m7", byKeyword.getValue("cursor").jsonPrimitive.content)
     }
 
     /** The wrapper's codes are exactly the README's Error codes table, plus the outcome-only `not_attempted`. */

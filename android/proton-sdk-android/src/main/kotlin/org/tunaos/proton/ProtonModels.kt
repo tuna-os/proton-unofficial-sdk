@@ -97,6 +97,38 @@ public data class ProtonSyncResult(
     public val changes: ProtonSyncChanges? = null,
 )
 
+/**
+ * What `search` looks for; at least one criterion besides [folder] is
+ * required. Text criteria are case-insensitive substrings of the message's
+ * metadata: bodies and attachments are end-to-end encrypted, so they cannot
+ * be searched on the server. See the README's `search` section.
+ */
+public data class ProtonSearchQuery(
+    /** Subject, sender or any recipient (name or address). */
+    public val keyword: String? = null,
+    public val subject: String? = null,
+    /** The sender's name or address. */
+    public val sender: String? = null,
+    /** Any To, Cc or Bcc recipient's name or address. */
+    public val recipient: String? = null,
+    /** Sent at or after this instant, in epoch milliseconds. */
+    public val afterMs: Long? = null,
+    /** Sent before this instant, in epoch milliseconds. */
+    public val beforeMs: Long? = null,
+    public val isUnread: Boolean? = null,
+    public val isStarred: Boolean? = null,
+    /** A folder or label id as `sync` lists it; null searches All Mail (`5`). */
+    public val folder: String? = null,
+)
+
+@Serializable
+public data class ProtonSearchResult(
+    /** Matching headers, newest first. */
+    public val messages: List<ProtonMailHeader>,
+    /** Pass as `cursor` to search on; null when the folder has been searched to the end. */
+    @SerialName("next_cursor") public val nextCursor: String? = null,
+)
+
 /** The result of one `events` poll. */
 @Serializable
 public data class ProtonEvents(
