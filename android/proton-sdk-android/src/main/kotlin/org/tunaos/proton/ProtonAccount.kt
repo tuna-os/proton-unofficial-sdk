@@ -116,7 +116,7 @@ public class ProtonAccount internal constructor(
                             buildJsonObject {
                                 put("name", attachment.name)
                                 put("mime_type", attachment.mimeType)
-                                put("cid", attachment.cid?.let(::JsonPrimitive) ?: JsonNull)
+                                put("cid", attachment.cid?.let { JsonPrimitive(it) } ?: JsonNull)
                                 put("data", Base64.encode(attachment.data))
                             },
                         )
@@ -202,7 +202,7 @@ public class ProtonAccount internal constructor(
             )
         }
 
-    private fun strings(values: List<String>): JsonArray = JsonArray(values.map(::JsonPrimitive))
+    private fun strings(values: List<String>): JsonArray = JsonArray(values.map { JsonPrimitive(it) })
 
     private fun mailboxes(values: List<ProtonMailbox>): JsonElement =
         protonJson.encodeToJsonElement(ListSerializer(ProtonMailbox.serializer()), values)

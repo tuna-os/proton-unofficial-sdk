@@ -55,9 +55,7 @@ dependencies {
 // The Go library, bound by gomobile (scripts/build-aar.sh). Its generated
 // Java classes and its libgojni.so for each ABI are compiled into this AAR,
 // so the published artifact is self-contained.
-val gomobileDir = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("gomobileDir").orElse("../build/gomobile"),
-)
+val gomobileDir: Directory = layout.projectDirectory.dir("../../build/gomobile")
 
 abstract class UnpackGomobile : DefaultTask() {
     @get:InputFile
