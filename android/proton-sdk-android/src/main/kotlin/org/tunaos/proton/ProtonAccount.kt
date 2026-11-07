@@ -90,6 +90,20 @@ public class ProtonAccount internal constructor(
     public suspend fun move(ids: List<String>, destination: String): List<ProtonOutcome> =
         outcomes(call("move") { put("ids", strings(ids)); put("destination", destination) })
 
+    /** Adds ([isLabelled]) or removes a user label on at most 50 ids. */
+    public suspend fun label(ids: List<String>, label: String, isLabelled: Boolean): List<ProtonOutcome> =
+        outcomes(call("label") { put("ids", strings(ids)); put("label", label); put("is_labelled", isLabelled) })
+
+    /** Deletes at most 50 ids permanently, wherever they are. Also discards drafts. */
+    public suspend fun delete(ids: List<String>): List<ProtonOutcome> =
+        outcomes(call("delete") { put("ids", strings(ids)) })
+
+    /**
+     * Permanently deletes everything in Trash (`3`) or Spam (`4`). Call
+     * again while [ProtonEmptyResult.more] is true.
+     */
+    public suspend fun emptyFolder(folder: String): ProtonEmptyResult = decode(call("empty_folder") { put("folder", folder) })
+
     /**
      * Encrypts and sends [mail].
      *
@@ -98,37 +112,55 @@ public class ProtonAccount internal constructor(
      */
     public suspend fun send(mail: ProtonOutgoingMail): ProtonSendResult = decode(
         call("send") {
-            put("sender", mail.sender)
-            put("sender_name", mail.senderName)
-            put("to", mailboxes(mail.to))
-            put("cc", mailboxes(mail.cc))
-            put("bcc", mailboxes(mail.bcc))
-            put("reply_tos", mailboxes(mail.replyTos))
-            put("subject", mail.subject)
-            put("body_html", mail.bodyHtml)
+            putComposed(
+                mail.sender, mail.senderName, mail.to, mail.cc, mail.bcc, mail.replyTos, mail.subject, mail.bodyHtml,
+                mail.attachments, mail.messageId, mail.inReplyTo, mail.references, mail.action,
+            )
             put("delivery", mail.delivery.wire)
             put("ordinary_confirmed", mail.ordinaryConfirmed)
-            put(
-                "attachments",
-                buildJsonArray {
-                    for (attachment in mail.attachments) {
-                        add(
-                            buildJsonObject {
-                                put("name", attachment.name)
-                                put("mime_type", attachment.mimeType)
-                                put("cid", attachment.cid?.let { JsonPrimitive(it) } ?: JsonNull)
-                                put("data", Base64.encode(attachment.data))
-                            },
-                        )
-                    }
-                },
-            )
-            mail.messageId?.let { put("message_id", it) }
-            mail.inReplyTo?.let { put("in_reply_to", it) }
-            mail.references?.let { put("references", it) }
-            mail.action?.let { put("action", it.wire) }
         },
     )
+
+    /**
+     * Saves [draft] to Drafts, encrypted. Saving again writes a new draft;
+     * pass the previous draft's id as [replaces] to delete it.
+     */
+    public suspend fun saveDraft(draft: ProtonDraft, replaces: String? = null): ProtonDraftResult = decode(
+        call("save_draft") {
+            putComposed(
+                draft.sender, draft.senderName, draft.to, draft.cc, draft.bcc, draft.replyTos, draft.subject, draft.bodyHtml,
+                draft.attachments, draft.messageId, draft.inReplyTo, draft.references, draft.action,
+            )
+            replaces?.let { put("replaces", it) }
+        },
+    )
+
+    /** Creates a user folder or label, optionally under [parent]; [color] is `#rrggbb`. */
+    public suspend fun createFolder(
+        name: String,
+        kind: ProtonFolderKind,
+        parent: String? = null,
+        color: String? = null,
+    ): ProtonFolder {
+        require(kind != ProtonFolderKind.SYSTEM) { "only folders and labels can be created" }
+        return folder(
+            call("create_folder") {
+                put("name", name)
+                put("kind", if (kind == ProtonFolderKind.FOLDER) "folder" else "label")
+                parent?.let { put("parent", it) }
+                color?.let { put("color", it) }
+            },
+        )
+    }
+
+    /** Renames a user folder or label, keeping its colour and parent. */
+    public suspend fun renameFolder(id: String, name: String): ProtonFolder =
+        folder(call("rename_folder") { put("id", id); put("name", name) })
+
+    /** Deletes a user folder or label; its mail stays in All Mail. */
+    public suspend fun deleteFolder(id: String) {
+        call("delete_folder") { put("id", id) }
+    }
 
     /**
      * Logs the session out server-side. Idempotent; afterwards this account
@@ -146,6 +178,53 @@ public class ProtonAccount internal constructor(
      */
     public suspend fun rawRequest(op: String, params: JsonObject = JsonObject(emptyMap())): JsonObject =
         call(op) { params.forEach { (key, value) -> put(key, value) } }
+
+    private fun folder(result: JsonObject): ProtonFolder = protonJson.decodeFromJsonElement(result.getValue("folder"))
+
+    /** The fields `send` and `save_draft` share. */
+    private fun JsonObjectBuilder.putComposed(
+        sender: String,
+        senderName: String,
+        to: List<ProtonMailbox>,
+        cc: List<ProtonMailbox>,
+        bcc: List<ProtonMailbox>,
+        replyTos: List<ProtonMailbox>,
+        subject: String,
+        bodyHtml: String,
+        attachments: List<ProtonOutgoingAttachment>,
+        messageId: String?,
+        inReplyTo: String?,
+        references: String?,
+        action: ProtonReplyAction?,
+    ) {
+        put("sender", sender)
+        put("sender_name", senderName)
+        put("to", mailboxes(to))
+        put("cc", mailboxes(cc))
+        put("bcc", mailboxes(bcc))
+        put("reply_tos", mailboxes(replyTos))
+        put("subject", subject)
+        put("body_html", bodyHtml)
+        put(
+            "attachments",
+            buildJsonArray {
+                for (attachment in attachments) {
+                    add(
+                        buildJsonObject {
+                            put("name", attachment.name)
+                            put("mime_type", attachment.mimeType)
+                            put("cid", attachment.cid?.let { JsonPrimitive(it) } ?: JsonNull)
+                            put("data", Base64.encode(attachment.data))
+                        },
+                    )
+                }
+            },
+        )
+        messageId?.let { put("message_id", it) }
+        inReplyTo?.let { put("in_reply_to", it) }
+        references?.let { put("references", it) }
+        action?.let { put("action", it.wire) }
+    }
 
     /**
      * Watches the account by polling [events]: Proton has no push channel

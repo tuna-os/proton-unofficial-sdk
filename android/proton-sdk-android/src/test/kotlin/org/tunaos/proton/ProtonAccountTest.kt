@@ -27,11 +27,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 
-private fun session(token: String) =
+internal fun session(token: String) =
     """{"login":"alice@proton.me","user_id":"u1","uid":"x1","access_token":"a-$token","refresh_token":"r-$token","password_mode":1,"key_pass":"a2V5"}"""
 
 /** Replies from a script and records every request it was given. */
-private class FakeTransport(vararg replies: String) : ProtonTransport {
+internal class FakeTransport(vararg replies: String) : ProtonTransport {
     private val queue = ArrayDeque(replies.toList())
     val requests = mutableListOf<JsonObject>()
 
@@ -42,7 +42,7 @@ private class FakeTransport(vararg replies: String) : ProtonTransport {
 }
 
 /** Remembers every saved session; can be told to fail. */
-private class RecordingStore(private val failure: Exception? = null) : ProtonSessionStore {
+internal class RecordingStore(private val failure: Exception? = null) : ProtonSessionStore {
     val saved = mutableListOf<ProtonSession>()
 
     override suspend fun save(session: ProtonSession) {
@@ -51,7 +51,7 @@ private class RecordingStore(private val failure: Exception? = null) : ProtonSes
     }
 }
 
-private fun JsonObject.refreshToken(): String =
+internal fun JsonObject.refreshToken(): String =
     getValue("session").jsonObject.getValue("refresh_token").jsonPrimitive.content
 
 class ProtonAccountTest {

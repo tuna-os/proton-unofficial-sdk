@@ -35,6 +35,7 @@ public enum class ProtonErrorCode(public val wire: String) {
     MESSAGE_TOO_LARGE("message_too_large"),
     SEND_FAILED("send_failed"),
     SEND_UNCERTAIN("send_uncertain"),
+    FOLDER_READONLY("folder_readonly"),
 
     /** Per-id outcome only: an earlier id's outage stopped the batch. */
     NOT_ATTEMPTED("not_attempted"),
@@ -77,7 +78,7 @@ public sealed class ProtonException(public val wire: String) : Exception(wire) {
     /** The request itself is malformed: ids, pages, batches, version. */
     public class InvalidRequest internal constructor(wire: String) : ProtonException(wire)
 
-    /** The folder does not exist or mail cannot be moved there. */
+    /** The folder does not exist, mail cannot be filed there, or it is a system folder that cannot change. */
     public class Folder internal constructor(wire: String) : ProtonException(wire)
 
     /** A message or attachment cannot be decrypted, fetched or uploaded. */
@@ -121,6 +122,7 @@ public sealed class ProtonException(public val wire: String) : Exception(wire) {
                 -> InvalidRequest(wire)
                 ProtonErrorCode.FOLDER_NOT_FOUND,
                 ProtonErrorCode.INVALID_DESTINATION,
+                ProtonErrorCode.FOLDER_READONLY,
                 -> Folder(wire)
                 ProtonErrorCode.DECRYPTION_FAILED,
                 ProtonErrorCode.ATTACHMENT_FAILED,

@@ -195,6 +195,42 @@ public data class ProtonSendResult(
     @SerialName("external_recipients") public val externalRecipients: Int,
 )
 
+/** A draft to save; the fields follow [ProtonOutgoingMail], and recipients may be empty. */
+public data class ProtonDraft(
+    public val sender: String,
+    public val subject: String = "",
+    public val bodyHtml: String = "",
+    public val senderName: String = "",
+    public val to: List<ProtonMailbox> = emptyList(),
+    public val cc: List<ProtonMailbox> = emptyList(),
+    public val bcc: List<ProtonMailbox> = emptyList(),
+    public val replyTos: List<ProtonMailbox> = emptyList(),
+    public val attachments: List<ProtonOutgoingAttachment> = emptyList(),
+    public val messageId: String? = null,
+    public val inReplyTo: String? = null,
+    public val references: String? = null,
+    /** Only with [inReplyTo] or [references]. */
+    public val action: ProtonReplyAction? = null,
+)
+
+@Serializable
+public data class ProtonDraftResult(
+    /** The new draft's Proton id. */
+    public val id: String,
+    /** Its Message-ID, without angle brackets. */
+    @SerialName("message_id") public val messageId: String,
+    /** Whether the draft it replaces was deleted; false leaves a duplicate behind. */
+    public val replaced: Boolean,
+)
+
+@Serializable
+public data class ProtonEmptyResult(
+    /** How many messages this run deleted. */
+    public val deleted: Int,
+    /** The run stopped for its time budget: call again. */
+    public val more: Boolean,
+)
+
 /** A human-verification challenge from a refused login. */
 @Serializable
 public data class HumanVerificationChallenge(
