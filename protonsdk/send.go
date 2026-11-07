@@ -210,22 +210,9 @@ func normaliseMIME(mimeType string) string {
 // contact card has a key, cleartext otherwise. The server files the Sent
 // copy and delivers Bcc from the packages, never from a header.
 func (s *apiSession) send(ctx context.Context, params sendParams, recipients []string, externalID string, staged []stagedAttachment, thread threading) envelope {
-	keys, code := s.keyrings(ctx)
+	keys, sender, addrKR, code := s.senderKey(ctx, params.Sender, "send_failed")
 	if code != "" {
 		return s.fail(code)
-	}
-	index := slices.IndexFunc(keys.addresses, func(a proton.Address) bool { return strings.EqualFold(a.Email, params.Sender) })
-	if index < 0 || !bool(keys.addresses[index].Send) || keys.addresses[index].Status != proton.AddressStatusEnabled {
-		return s.fail("sender_unknown")
-	}
-	sender := keys.addresses[index]
-	senderKR, ok := keys.addrKRs[sender.ID]
-	if !ok {
-		return s.fail("send_failed")
-	}
-	addrKR, err := senderKR.FirstKey()
-	if err != nil {
-		return s.fail("send_failed")
 	}
 	settings, err := s.client.GetMailSettings(ctx)
 	if err != nil {
@@ -257,56 +244,19 @@ func (s *apiSession) send(ctx context.Context, params sendParams, recipients []s
 	if parentID != "" {
 		action = thread.action
 	}
-	if len(params.ReplyTos) > 0 {
-		replyTos := fromMail(params.ReplyTos)
-		s.client.AddPreRequestHook(func(_ *resty.Client, r *resty.Request) error {
-			return withReplyTos(r, replyTos)
-		})
+	content := draftContent{
+		senderName: params.SenderName,
+		subject:    params.Subject,
+		bodyHTML:   params.BodyHTML,
+		externalID: externalID,
+		to:         params.To,
+		cc:         params.Cc,
+		bcc:        params.Bcc,
+		replyTos:   params.ReplyTos,
 	}
-	draft, err := s.client.CreateDraft(ctx, addrKR, proton.CreateDraftReq{
-		Message: proton.DraftTemplate{
-			Subject:    params.Subject,
-			Sender:     &mail.Address{Name: params.SenderName, Address: sender.Email},
-			ToList:     fromMail(params.To),
-			CCList:     fromMail(params.Cc),
-			BCCList:    fromMail(params.Bcc),
-			Body:       params.BodyHTML,
-			MIMEType:   rfc822.TextHTML,
-			ExternalID: externalID,
-		},
-		ParentID: parentID,
-		Action:   action,
-	})
-	if err != nil {
-		return s.fail(s.refusal(err))
-	}
-	if !validID(draft.ID) {
-		return s.fail("send_failed")
-	}
-	attKeys := make(map[string]*crypto.SessionKey, len(staged))
-	for _, attachment := range staged {
-		uploaded, err := s.client.UploadAttachment(ctx, addrKR, proton.CreateAttachmentReq{
-			MessageID:   draft.ID,
-			Filename:    attachment.name,
-			MIMEType:    rfc822.MIMEType(attachment.mimeType),
-			Disposition: attachment.disposition,
-			ContentID:   attachment.cid,
-			Body:        attachment.data,
-		})
-		if err != nil {
-			code := s.classify(err)
-			if code == "request_failed" {
-				code = "attachment_failed"
-			}
-			s.discard(draft.ID)
-			return s.fail(code)
-		}
-		key, ok := attachmentKey(addrKR, uploaded)
-		if !ok {
-			s.discard(draft.ID)
-			return s.fail("attachment_failed")
-		}
-		attKeys[uploaded.ID] = key
+	draft, attKeys, code := s.writeDraft(ctx, addrKR, sender, content, parentID, action, staged, s.refusal)
+	if code != "" {
+		return s.fail(code)
 	}
 	mimeBody, err := buildMIMEBody(params.BodyHTML, staged)
 	if err != nil {
@@ -332,6 +282,96 @@ func (s *apiSession) send(ctx context.Context, params sendParams, recipients []s
 		"internal_recipients": internal,
 		"external_recipients": len(recipients) - internal,
 	})
+}
+
+// senderKey unlocks the account's keys and picks the sending address and
+// its primary key. An address that is not one of the account's enabled
+// sending addresses is sender_unknown; a key that will not unlock is
+// keyFailure.
+func (s *apiSession) senderKey(ctx context.Context, address, keyFailure string) (unlocked, proton.Address, *crypto.KeyRing, string) {
+	keys, code := s.keyrings(ctx)
+	if code != "" {
+		return unlocked{}, proton.Address{}, nil, code
+	}
+	index := slices.IndexFunc(keys.addresses, func(a proton.Address) bool { return strings.EqualFold(a.Email, address) })
+	if index < 0 || !bool(keys.addresses[index].Send) || keys.addresses[index].Status != proton.AddressStatusEnabled {
+		return unlocked{}, proton.Address{}, nil, "sender_unknown"
+	}
+	sender := keys.addresses[index]
+	senderKR, ok := keys.addrKRs[sender.ID]
+	if !ok {
+		return unlocked{}, proton.Address{}, nil, keyFailure
+	}
+	addrKR, err := senderKR.FirstKey()
+	if err != nil {
+		return unlocked{}, proton.Address{}, nil, keyFailure
+	}
+	return keys, sender, addrKR, ""
+}
+
+// draftContent is what a draft holds, for send and save_draft alike.
+type draftContent struct {
+	senderName, subject, bodyHTML, externalID string
+	to, cc, bcc, replyTos                     []mailAddress
+}
+
+// writeDraft creates a draft encrypted to the sender's key and uploads its
+// attachments, returning each uploaded attachment's session key. A failure
+// to create the draft is classified by createFailure; once the draft
+// exists, any failure discards it again, so nothing half-written is left.
+func (s *apiSession) writeDraft(ctx context.Context, addrKR *crypto.KeyRing, sender proton.Address, content draftContent, parentID string, action proton.CreateDraftAction, staged []stagedAttachment, createFailure func(error) string) (proton.Message, map[string]*crypto.SessionKey, string) {
+	if len(content.replyTos) > 0 {
+		replyTos := fromMail(content.replyTos)
+		s.client.AddPreRequestHook(func(_ *resty.Client, r *resty.Request) error {
+			return withReplyTos(r, replyTos)
+		})
+	}
+	draft, err := s.client.CreateDraft(ctx, addrKR, proton.CreateDraftReq{
+		Message: proton.DraftTemplate{
+			Subject:    content.subject,
+			Sender:     &mail.Address{Name: content.senderName, Address: sender.Email},
+			ToList:     fromMail(content.to),
+			CCList:     fromMail(content.cc),
+			BCCList:    fromMail(content.bcc),
+			Body:       content.bodyHTML,
+			MIMEType:   rfc822.TextHTML,
+			ExternalID: content.externalID,
+		},
+		ParentID: parentID,
+		Action:   action,
+	})
+	if err != nil {
+		return proton.Message{}, nil, createFailure(err)
+	}
+	if !validID(draft.ID) {
+		return proton.Message{}, nil, createFailure(errors.New("draft id is not a valid id"))
+	}
+	attKeys := make(map[string]*crypto.SessionKey, len(staged))
+	for _, attachment := range staged {
+		uploaded, err := s.client.UploadAttachment(ctx, addrKR, proton.CreateAttachmentReq{
+			MessageID:   draft.ID,
+			Filename:    attachment.name,
+			MIMEType:    rfc822.MIMEType(attachment.mimeType),
+			Disposition: attachment.disposition,
+			ContentID:   attachment.cid,
+			Body:        attachment.data,
+		})
+		if err != nil {
+			code := s.classify(err)
+			if code == "request_failed" {
+				code = "attachment_failed"
+			}
+			s.discard(draft.ID)
+			return proton.Message{}, nil, code
+		}
+		key, ok := attachmentKey(addrKR, uploaded)
+		if !ok {
+			s.discard(draft.ID)
+			return proton.Message{}, nil, "attachment_failed"
+		}
+		attKeys[uploaded.ID] = key
+	}
+	return draft, attKeys, ""
 }
 
 // recipientPrefs looks one recipient up: its API keys (and whether it is a

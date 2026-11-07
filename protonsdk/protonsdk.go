@@ -72,15 +72,22 @@ func (e *codedError) Error() string { return e.Code }
 type handler func(ctx context.Context, raw []byte) envelope
 
 var operations = map[string]handler{
-	"login":     login,
-	"sync":      syncOp,
-	"events":    eventsOp,
-	"message":   messageOp,
-	"mark_read": markReadOp,
-	"move":      moveOp,
-	"star":      starOp,
-	"send":      sendOp,
-	"revoke":    revokeOp,
+	"login":         login,
+	"sync":          syncOp,
+	"events":        eventsOp,
+	"message":       messageOp,
+	"mark_read":     markReadOp,
+	"move":          moveOp,
+	"star":          starOp,
+	"label":         labelOp,
+	"delete":        deleteOp,
+	"empty_folder":  emptyFolderOp,
+	"send":          sendOp,
+	"save_draft":    saveDraftOp,
+	"create_folder": createFolderOp,
+	"rename_folder": renameFolderOp,
+	"delete_folder": deleteFolderOp,
+	"revoke":        revokeOp,
 }
 
 // Request runs one JSON request and returns its reply envelope, without a
