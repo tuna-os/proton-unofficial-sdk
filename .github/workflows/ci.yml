@@ -1,0 +1,144 @@
+name: CI
+
+# Go tests against go-proton-api's in-process server (no account, no Proton
+# traffic), the gomobile bindings, the Kotlin wrapper's JVM tests and its
+# AAR. A v* tag also publishes the release.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Tuna Mail's NDK and minSdk (tuna-os/thunderbird-android).
+  NDK_VERSION: 28.2.13676358
+  ANDROID_API: 24
+
+jobs:
+  go:
+    name: go test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # aarch64 too: Hylki ships the helper for both.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The oldest Go the module builds with.
+          go-version-file: go.mod
+          cache: false
+
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l protonsdk cmd tools.go)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-formatted:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        # With -mod=vendor, go also refuses a vendor tree that no longer
+        # matches go.mod.
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: 'off'
+        run: |
+          go vet ./...
+          go vet -tags tools .
+
+      - name: Test
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: 'off'
+        run: go test ./...
+
+      - name: Helper smoke
+        env:
+          GOFLAGS: -mod=vendor
+          GOPROXY: 'off'
+        run: |
+          go build -trimpath -o proton-helper ./cmd/proton-helper
+          ln -s proton-helper hylki-proton
+          for helper in ./proton-helper ./hylki-proton; do
+            reply="$(echo '{"version":2,"op":"login"}' | "$helper")"
+            test "$reply" = '{"version":1,"error":{"code":"unsupported_version"}}'
+          done
+
+  android:
+    name: gomobile + Kotlin wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: NDK and gomobile
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          # gomobile and gobind at the x/mobile version go.mod pins.
+          version="$(awk '$1 == "golang.org/x/mobile" { print $2 }' go.mod)"
+          go install "golang.org/x/mobile/cmd/gomobile@$version" "golang.org/x/mobile/cmd/gobind@$version"
+
+      - name: gomobile bind
+        run: scripts/build-aar.sh
+
+      - name: Kotlin tests and AAR
+        working-directory: android
+        run: ./gradlew --no-daemon :proton-sdk-android:testDebugUnitTest :proton-sdk-android:dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proton-sdk-android
+          path: android/proton-sdk-android/build/dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [go, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: proton-sdk-android
+          path: dist
+
+      - name: Check the version
+        run: |
+          version="$(sed -n 's/^VERSION_NAME=//p' android/gradle.properties)"
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "tag $GITHUB_REF_NAME does not match VERSION_NAME $version" >&2
+            exit 1
+          }
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md
