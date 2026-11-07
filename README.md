@@ -649,8 +649,8 @@ its `-sources.jar`. The Gradle module compiles the generated Java sources
 and the per-ABI `libgojni.so` into its own AAR, so the published artifact
 is self-contained; `dist` leaves `proton-sdk-android-<version>.aar` and
 `proton-sdk-android-<version>-maven.zip` in
-`android/proton-sdk-android/build/dist/`. `android/gradle.properties` caps
-Gradle at 3 GB of heap and four workers.
+`android/proton-sdk-android/build/dist/`. `android/gradle.properties` keeps
+Gradle to one 2 GB JVM with three workers and compiles Kotlin in-process.
 
 ### Releases
 
