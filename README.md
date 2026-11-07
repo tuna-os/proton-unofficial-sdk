@@ -27,7 +27,7 @@ reply out, usable three ways:
 > account](#watching-an-account)), don't bulk-process mailboxes, and expect
 > that Proton can change or close the API at any time.
 
-Version 0.1.0 is the first release. The protocol follows the needs of its
+The current release is 0.1.1. The protocol follows the needs of its
 first two users, Hylki's Proton support and the Tuna Mail Android app, and
 may still change; the envelope's `version` field guards incompatible
 changes.
@@ -45,7 +45,10 @@ changes.
   watching an account.
 - Decrypted messages as finished RFC 5322 bytes, attachments included, the
   way Proton Mail Bridge serves them over IMAP.
-- Mark read/unread, star/unstar and move, in batches with per-id outcomes.
+- Mark read/unread, star/unstar, label/unlabel, move and permanent delete,
+  in batches with per-id outcomes; emptying Trash and Spam.
+- Drafts saved to the server, encrypted like sent mail.
+- Creating, renaming and deleting folders and labels.
 - End-to-end encrypted sending: Proton recipients by their keys, outside
   recipients by PGP/MIME or PGP/Inline when they publish a key, cleartext
   only with explicit consent; replies and forwards threaded through their
@@ -126,7 +129,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("org.tunaos.proton:proton-sdk-android:0.1.0")
+    implementation("org.tunaos.proton:proton-sdk-android:0.1.1")
 }
 ```
 
@@ -526,6 +529,76 @@ Request: `session`. Logs the session out server-side (`DELETE /auth/v4`).
 Idempotent: a session the server already dropped is a success. Result:
 `{}`.
 
+### `delete`
+
+Request: `session`, `ids` (≤ 50).
+
+Deletes the messages permanently, wherever they are: there is no undo
+and no Trash copy. Proton's own clients offer it only in Trash, Spam and
+Drafts; the caller decides. Outcomes as for `mark_read`. Deleting a draft
+is how a client discards one.
+
+### `empty_folder`
+
+Request: `session`, `folder` (Trash `3` or Spam `4`; anything else is
+`invalid_destination`).
+
+Deletes everything in the folder permanently, newest first, a page of 150
+at a time (go-proton-api exposes no call for the API's own empty
+endpoint). Result: `{"deleted": <count>, "more": <bool>, "session"}`.
+`more: true` means the run stopped with less than 15 seconds of its
+budget left: call again. A message that survives its own delete stops the
+run with `request_failed` rather than looping on it.
+
+### `save_draft`
+
+Request: `session`, `sender`, `subject`, `body_html`, and optionally
+`sender_name`, `to`, `cc`, `bcc`, `reply_tos`, `attachments`,
+`message_id`, `in_reply_to`, `references`, `action` — each as for `send`,
+except that recipients may be empty — and `replaces`, the id of the draft
+this one supersedes.
+
+Writes a draft to Drafts the way `send` writes its draft: body encrypted
+to the sender's address key, attachments uploaded encrypted, threaded to
+its parent when one is found. Nothing is sent. Saving again writes a new
+draft and deletes the one named by `replaces`, the way IMAP clients save
+drafts; updating a Proton draft in place would mean replacing its
+attachments one request at a time and could leave a half-updated draft.
+`replaces` only ever deletes a draft: any other message is left alone.
+
+Result: `{"id", "message_id", "replaced", "session"}` — `id` the new
+draft's Proton id, `message_id` its Message-ID without `<>`, `replaced`
+whether the superseded draft was deleted (when false, the old draft is
+still there: delete it with `delete` or leave the duplicate). Errors:
+`invalid_recipient`, `sender_unknown`, `attachment_failed`,
+`invalid_id` (`replaces`), and the transport and session codes; a draft
+whose attachments fail to upload is deleted again.
+
+### `label`
+
+Request: `session`, `ids` (≤ 50), `label`, `is_labelled`.
+
+Adds (`is_labelled: true`) or removes a user label, a tag that leaves the
+message in its folder. Only user labels (`kind: "label"` in `sync`) are
+accepted: folders are `move`'s and Starred is `star`'s, so those and the
+other system ids are `invalid_destination`; an unknown id is
+`folder_not_found`. Outcomes as for `mark_read`.
+
+### `create_folder`, `rename_folder`, `delete_folder`
+
+- `create_folder`: `session`, `name`, `kind` (`"folder"`, a place mail is
+  moved to, or `"label"`, a tag), optional `parent` (a user folder or
+  label id) and `color` (`#rrggbb`, default Proton's `#7272a7`).
+- `rename_folder`: `session`, `id`, `name`; the colour and parent stay.
+- `delete_folder`: `session`, `id`. The mail inside is not deleted:
+  Proton keeps it in All Mail.
+
+Names are trimmed, 1–100 characters without control characters, else
+`invalid_request`. System folders and views (any all-digit id) are
+`folder_readonly`; unknown ids are `folder_not_found`. `create_folder` and
+`rename_folder` answer `{"folder": <folder row as sync lists it>,
+"session"}`, `delete_folder` answers `{"session"}`.
+
 ## Error codes
 
 | code | meaning |
@@ -563,10 +636,11 @@ Idempotent: a session the server already dropped is a success. Result:
 | `message_too_large` | the server refuses the message size |
 | `send_failed` | definite send failure: nothing was sent, safe to retry |
 | `send_uncertain` | the submit may have delivered: never retry automatically |
+| `folder_readonly` | a system folder, which cannot be renamed or deleted |
 
-Per-id outcome codes (`mark_read`, `move`, `star`): `null`, `request_failed`,
-`not_attempted`, or one of `transport_failed` / `timeout` /
-`session_revoked` for the id an outage hit.
+Per-id outcome codes (`mark_read`, `move`, `star`, `label`, `delete`):
+`null`, `request_failed`, `not_attempted`, or one of `transport_failed` /
+`timeout` / `session_revoked` for the id an outage hit.
 
 ## Deviations from the Tuta contract
 
@@ -602,6 +676,16 @@ Per-id outcome codes (`mark_read`, `move`, `star`): `null`, `request_failed`,
 - `events` is new: Tuta's helper streams `watch` over its event bus
   websocket; Proton has no push for third-party clients, so the caller
   polls.
+- `delete`, `empty_folder`, `save_draft`, `create_folder`,
+  `rename_folder` and `delete_folder` share Tuta's names but not all of
+  its shapes: `delete` takes no `folder` and deletes from anywhere;
+  `empty_folder` takes `folder` (not `id`), deletes a page at a time and
+  may answer `more`; `save_draft` supersedes an old draft through
+  `replaces`, and a draft is discarded with `delete` (there is no
+  `delete_draft`); labels are made with `create_folder`'s `kind: "label"`
+  and applied with `label` rather than Tuta's `create_label` /
+  `apply_labels`; `delete_folder` never deletes mail. New code:
+  `folder_readonly`.
 
 
 ## Building and testing

@@ -4,6 +4,30 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
+## [0.1.1] - 2026-11-07
+
+### Added
+
+- `delete`: permanent delete of up to 50 ids, with per-id outcomes.
+- `empty_folder`: empties Trash or Spam a page at a time, answering
+  `more` when a large folder needs another run.
+- `label`: adds or removes a user label on up to 50 ids.
+- `save_draft`: writes an encrypted draft to Drafts, with attachments and
+  threading, and deletes the draft it `replaces`.
+- `create_folder`, `rename_folder`, `delete_folder` for user folders and
+  labels, and the `folder_readonly` code for system folders.
+- Kotlin: `ProtonAccount.delete`, `emptyFolder`, `label`, `saveDraft`,
+  `createFolder`, `renameFolder`, `deleteFolder`, with `ProtonDraft`,
+  `ProtonDraftResult`, `ProtonEmptyResult` and
+  `ProtonErrorCode.FOLDER_READONLY`.
+- Tests that the README's error-code table covers every code the Go
+  library produces and matches the Kotlin `ProtonErrorCode` exactly.
+
+### Changed
+
+- `send` and `save_draft` share one draft-writing path; `send`'s
+  behaviour and codes are unchanged.
+
 ## [0.1.0] - 2026-11-07
 
 The first release, extracted with its history from the `hylki-proton`
