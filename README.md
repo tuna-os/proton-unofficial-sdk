@@ -1,13 +1,175 @@
-# Proton native helper
+# proton-unofficial-sdk
 
-`hylki-proton` speaks the same stdio JSON envelope as the
-[Tuta helper](../tuta/README.md): one request object on stdin, one reply line
-on stdout, protocol version pinned at `1`. Every operation is implemented
-over [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) and
-gopenpgp: SRP login with TOTP, folder/label sync with event-based
-increments, decrypted RFC 5322 messages, read state, moves, end-to-end
-encrypted sending and server-side logout. It does not listen on a socket,
-speak IMAP/SMTP, or write anything to disk.
+An unofficial Proton Mail client library in Go: SRP login with TOTP and
+human verification, folder and label sync with event-based increments,
+decrypted RFC 5322 messages, read and star state, moves, end-to-end
+encrypted sending and server-side logout. One JSON request in, one JSON
+reply out, usable three ways:
+
+- **as a Go package**, `github.com/tuna-os/proton-unofficial-sdk/protonsdk`;
+- **as a helper process**, `proton-helper` (also installed as
+  `hylki-proton`), speaking the contract over stdin/stdout, which is how the
+  [Hylki](https://github.com/hyprlab/hylki) desktop mail client uses it;
+- **on Android**, as `org.tunaos.proton:proton-sdk-android`: the package
+  bound by gomobile plus a Kotlin wrapper with typed results, sealed errors
+  and the session-rotation rules enforced.
+
+> **Unofficial.** This project is not affiliated with, endorsed by or
+> supported by Proton AG. "Proton" and "Proton Mail" are trademarks of
+> Proton AG, used here only to say which service the library talks to.
+> It uses Proton's public client API the way Proton's own open-source
+> clients do, through Proton's own open-source libraries, and identifies
+> itself honestly as a third-party client (`x-pm-appversion: Other`).
+> Proton's [Terms of Service](https://proton.me/legal/terms) (§2.10) allow
+> automated access only while the traffic stays indistinguishable from a
+> person using a normal client, and Proton may block clients that deviate:
+> poll no more often than Proton's own apps do (see [Watching an
+> account](#watching-an-account)), don't bulk-process mailboxes, and expect
+> that Proton can change or close the API at any time.
+
+Version 0.1.0 is the first release. The protocol follows the needs of its
+first two users, Hylki's Proton support and the Tuna Mail Android app, and
+may still change; the envelope's `version` field guards incompatible
+changes.
+
+## Features
+
+- SRP sign-in with TOTP, two-password accounts (mailbox password) and
+  Proton's human verification (CAPTCHA) challenge.
+- Resumable sessions with refresh-token rotation handed back on every
+  reply.
+- Folder, label and message-header sync with stable keyset paging, an id
+  snapshot for reconciliation, and incremental changes from Proton's event
+  log.
+- A cheap `events` poll naming the folders and messages that changed, for
+  watching an account.
+- Decrypted messages as finished RFC 5322 bytes, attachments included, the
+  way Proton Mail Bridge serves them over IMAP.
+- Mark read/unread, star/unstar and move, in batches with per-id outcomes.
+- End-to-end encrypted sending: Proton recipients by their keys, outside
+  recipients by PGP/MIME or PGP/Inline when they publish a key, cleartext
+  only with explicit consent; replies and forwards threaded through their
+  parent; uncertain submits detected rather than retried.
+- Server-side logout.
+
+## Security model
+
+- **Proton's libraries do all the cryptography.** SRP, key derivation,
+  key unlocking, encryption, decryption and signing are
+  [go-proton-api](https://github.com/ProtonMail/go-proton-api),
+  [go-srp](https://github.com/ProtonMail/go-srp),
+  [gopenpgp](https://github.com/ProtonMail/gopenpgp) and Proton's
+  [go-crypto](https://github.com/ProtonMail/go-crypto) fork, pinned at the
+  revisions Proton Mail Bridge ships. This repository adds no cryptographic
+  code of its own; it chooses which of those calls to make, in the order
+  Bridge and Proton's web client make them (`sendprefs.go` is a port of
+  Bridge's per-recipient encryption table).
+- **Plaintext stays in memory.** The library writes nothing to disk and
+  keeps no state between requests; decrypted mail exists only in the reply.
+- **The session is the secret.** It carries the tokens and the
+  bcrypt-salted mailbox passphrase (never the password). Callers store it
+  encrypted — a keyring on the desktop, the Android Keystore on Android —
+  and treat it like the password.
+- **Nothing is logged.** go-proton-api's logrus output and resty's logger
+  are silenced, a library panic becomes `helper_failed`, and replies carry
+  only fixed codes, never server text or request data.
+- **Ids are validated before they reach a URL**, recipients and
+  Message-IDs before they reach a header.
+- **Honest identification.** The client sends `x-pm-appversion: Other`,
+  the API's third-party slot, never an official client's identity.
+
+## Using it
+
+### From Go
+
+```go
+import "github.com/tuna-os/proton-unofficial-sdk/protonsdk"
+
+reply := protonsdk.Request(`{"version":1,"op":"login","email":"…","password":"…"}`)
+```
+
+`Request(string) string` and `RequestBytes([]byte) []byte` run one request
+under the 90-second budget and return its envelope (no trailing newline);
+`Serve(io.Reader, io.Writer)` is the helper's framing. All three are safe
+for concurrent use, but two requests carrying the same session race on its
+refresh token: run one account's requests one at a time, each with the
+session the previous reply returned. The package silences logrus
+process-wide on first use.
+
+### As a helper process
+
+```sh
+go build -mod=vendor -trimpath -o proton-helper ./cmd/proton-helper
+echo '{"version":2,"op":"login"}' | ./proton-helper
+# {"version":1,"error":{"code":"unsupported_version"}}
+```
+
+One request on stdin up to EOF, one reply line on stdout, exit 0 always.
+Installed or linked as `hylki-proton`, the same binary is the helper Hylki
+runs for Proton accounts; it behaves identically under either name.
+A caller should allow a few seconds over the 90-second budget for startup
+(Hylki allows 100), then kill and reap the process.
+
+### On Android
+
+Add the Maven repository from the release's
+`proton-sdk-android-<version>-maven.zip` (unzip it into, say,
+`third_party/maven`) and depend on the artifact:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven { url = uri("third_party/maven") }
+    }
+}
+
+// build.gradle.kts
+dependencies {
+    implementation("org.tunaos.proton:proton-sdk-android:0.1.0")
+}
+```
+
+The AAR holds `libgojni.so` for `arm64-v8a` and `x86_64`, minSdk 24, and
+consumer R8 rules that keep the JNI-called classes. It depends on
+kotlinx-coroutines and kotlinx-serialization-json.
+
+```kotlin
+val client = ProtonClient()                       // GoProtonTransport, Dispatchers.IO
+val store = ProtonSessionStore { session -> keystoreBackedPrefs.put(accountId, session.json) }
+
+val account = try {
+    client.login(email, password, store, totp = code)
+} catch (e: ProtonException.HumanVerificationRequired) {
+    // Open e.challenge!!.verifyUrl() in a WebView, then retry with
+    // humanVerification = HumanVerificationToken(token, type).
+    throw e
+}
+
+// Later runs: client.account(ProtonSession(storedJson), store)
+val inbox = account.sync(limit = 50)
+val mime: ByteArray = account.message(inbox.messages.first().id).mime
+account.watch(since = inbox.eventId).collect { event -> /* resync what it names */ }
+```
+
+`ProtonAccount` owns its session and enforces the rotation contract:
+
+- requests on one account run one at a time, each with the session the
+  previous reply left behind;
+- every session a reply carries — success or error — is passed to
+  `ProtonSessionStore.save` before the result is returned or the error
+  thrown; if `save` throws, that exception propagates instead;
+- the exchange with Go and the save run under `NonCancellable`, so
+  cancelling a coroutine cannot drop a rotated session.
+
+Keep exactly one `ProtonAccount` per stored session. Errors are a sealed
+`ProtonException` (`Auth`, `HumanVerificationRequired`, `Session`,
+`Transport`, `InvalidRequest`, `Folder`, `Content`, `Send`,
+`SendUncertain`, `Failed`) whose `code` is a `ProtonErrorCode` and whose
+`wire` is the code as received. `ProtonClient(transport = …)` takes any
+`ProtonTransport`, which is how the wrapper's tests run on the JVM without
+the native library.
+
 
 ## Framing
 
@@ -15,16 +177,15 @@ speak IMAP/SMTP, or write anything to disk.
   at most 32 MiB (attachments travel base64 inside `send`). Unknown fields
   are refused (`invalid_request`), as the Tuta helper's
   `deny_unknown_fields` does.
-- Reply: exactly one line, always exit 0 —
+- Reply: one JSON object (one line from the helper, which always exits 0) —
   `{"version": 1, "result": {...}}` or
   `{"version": 1, "error": {"code": "<fixed>"}}`.
 - A missing `version` is `invalid_request`; a present but different one is
   `unsupported_version` and nothing is contacted.
-- Every operation runs under a 90-second budget (the parent allows 100).
-- Passwords, codes and tokens travel on stdin only. Nothing is logged:
-  go-proton-api's logrus output and resty's logger are both silenced, a
-  library panic becomes `helper_failed`, and replies never carry server
-  text — only the codes below.
+- Every operation runs under a 90-second budget.
+- Passwords, codes and tokens travel in the request only (stdin for the
+  helper). Nothing is logged; replies never carry server text — only the
+  codes below.
 - The client identifies as `x-pm-appversion: Other`, the API's third-party
   slot, never as an official client.
 
@@ -194,6 +355,46 @@ created or changed since, re-read rather than taken from a partial event.
 `refresh: true` — the server demanded a resync, or no longer knows `since`
 — means discard the deltas and sync from scratch; `event_id` is then the
 current one.
+
+### `events`
+
+Request: `session`, `since` (an `event_id` from `sync` or an earlier
+`events`).
+
+The poll for watching an account: replays the event log from `since` (up to
+500 events per call) and says what changed, without listing folders or
+re-reading headers — one or two requests to the API.
+
+Result:
+
+| key               | value                                                              |
+|-------------------|--------------------------------------------------------------------|
+| `event_id`        | poll from here next time                                           |
+| `refresh`         | the server demanded a full resync, or no longer knows `since`: resync everything from `event_id` |
+| `more`            | more events wait past `event_id`: poll again right away            |
+| `folders_changed` | a folder or label was created, renamed, moved or deleted           |
+| `mail_changed`    | sorted ids of the folders the created or changed mail is in now    |
+| `updated`         | ids of messages created or changed                                 |
+| `deleted`         | ids of messages deleted                                            |
+| `session`         | see rotation                                                       |
+
+An event names a changed message's labels as they are *now*, so a move
+reports its destination but not the folder it left: refresh whatever local
+folder holds an id in `updated` or `deleted` as well as the folders in
+`mail_changed`. `events` replaces nothing in `sync`: after a poll names a
+folder, `sync` it with `since` to get the headers.
+
+#### Watching an account
+
+Proton gives third-party clients no push channel — its own apps' push
+notifications go through Proton's registrations with Google's and Apple's
+push services — so a client watches an account by polling `events`. Bridge
+polls every 20 seconds plus jitter; poll no more often than that while the
+app is in the foreground (the Kotlin wrapper's `watch` defaults to 30
+seconds), and let Android's WorkManager (15-minute minimum) or the desktop
+app's idle timer schedule background polls. Polling faster gains nothing
+and makes the client stand out to Proton's abuse detection (see the
+disclaimer above).
 
 ### `message`
 
@@ -398,29 +599,74 @@ Per-id outcome codes (`mark_read`, `move`, `star`): `null`, `request_failed`,
   `message_too_large`. `unsupported_operation`, `unsupported_u2f`,
   `unsupported_webauthn`, `resume_failed`, `incomplete_response`,
   `unsupported_legacy_body` and `body_too_large` are never produced.
+- `events` is new: Tuta's helper streams `watch` over its event bus
+  websocket; Proton has no push for third-party clients, so the caller
+  polls.
 
-## Verifying
+
+## Building and testing
+
+The Go module needs Go ≥ 1.26.1. Everything below is offline, from
+`vendor/`:
 
 ```sh
-cd native/proton
-gofmt -l . | grep -v '^vendor/'   # must print nothing
+gofmt -l protonsdk cmd                    # must print nothing
 go vet -mod=vendor ./...
 go test -mod=vendor ./...
-go build -mod=vendor -o hylki-proton .
-echo '{"version":2,"op":"login"}' | ./hylki-proton
+go build -mod=vendor -trimpath -o proton-helper ./cmd/proton-helper
 ```
 
-The tests are offline. They run go-proton-api's own in-process API server
+The tests run go-proton-api's own in-process API server
 (`github.com/ProtonMail/go-proton-api/server`) behind a reverse proxy the
-tests control, and drive the helper through its real framing: login →
-sync (pages, cursor, snapshot, events) → message decrypt → mark_read →
-move → send to Proton recipients (whose copies are then decrypted from
-their own accounts), to a cleartext outsider and to a PGP outsider (whose
-package is opened with the recipient's key), replies and forwards threaded
-through their parent → revoke, plus token rotation
-and every failure mode the proxy can inject (refusals, lost submits, lost
+tests control, and drive the library through its real framing: login →
+sync (pages, cursor, snapshot, events) → events polls → message decrypt →
+mark_read → move → send to Proton recipients (whose copies are then
+decrypted from their own accounts), to a cleartext outsider and to a PGP
+outsider (whose package is opened with the recipient's key), replies and
+forwards threaded through their parent → revoke, plus token rotation and
+every failure mode the proxy can inject (refusals, lost submits, lost
 replies, retried submits, timeouts, human verification, outdated client).
 No test talks to the real Proton API.
+
+### The Android library
+
+Two steps, both in the [Tuna Mail build
+image](https://github.com/tuna-os/thunderbird-android/tree/main/tools/build-env)
+(JDK 21, Android SDK 37, NDK 28.2, Go 1.26, gomobile), or anywhere with the
+same tools:
+
+```sh
+scripts/build-aar.sh                      # gomobile bind → build/gomobile/
+cd android
+./gradlew :proton-sdk-android:testDebugUnitTest :proton-sdk-android:dist
+./gradlew --stop
+```
+
+`scripts/build-aar.sh` runs `gomobile bind -target=android/arm64,android/amd64
+-androidapi 24 -javapkg org.tunaos.proton.gomobile` and writes
+`proton-sdk-android.aar` (the raw binding: `Protonsdk.request(String)`) and
+its `-sources.jar`. The Gradle module compiles the generated Java sources
+and the per-ABI `libgojni.so` into its own AAR, so the published artifact
+is self-contained; `dist` leaves `proton-sdk-android-<version>.aar` and
+`proton-sdk-android-<version>-maven.zip` in
+`android/proton-sdk-android/build/dist/`. `android/gradle.properties` caps
+Gradle at 3 GB of heap and four workers.
+
+### Releases
+
+Pushing a `v*` tag runs the release job of `.github/workflows/ci.yml`: the
+Go tests, the gomobile build, the Kotlin tests, then a GitHub release with the AAR and
+the Maven zip as assets — the same shape as
+[tuta-unofficial-sdk](https://github.com/tuna-os/tuta-unofficial-sdk)'s
+Android artifact, so an app consumes both the same way. Bump
+`VERSION_NAME` in `android/gradle.properties` with the tag.
+
+### Using it from Hylki
+
+Hylki builds the helper from a submodule, offline, from `vendor/`:
+`go build -mod=vendor -trimpath -buildvcs=false -o proton-helper
+./cmd/proton-helper`, then installs it as `/app/bin/proton-helper` with an
+`hylki-proton` symlink.
 
 ## Dependencies
 
@@ -430,29 +676,22 @@ No test talks to the real Proton API.
   gopenpgp 2.4 and a 2022 go-crypto; the pinned revision is what the
   official client currently runs against the live API, with gopenpgp
   `v2.10.0-proton` and go-crypto `v1.4.1-proton`. Its `go.mod` replaces
-  resty with Proton's fork, and a
-  dependency's replace does not apply to us, so `go.mod` repeats it:
+  resty with Proton's fork, and a dependency's replace does not apply to
+  us, so `go.mod` repeats it:
   `github.com/go-resty/resty/v2 => github.com/ProtonMail/resty/v2`.
-- The pin needs Go ≥ 1.26.1 (`go.mod`'s `go` directive). The Flatpak's
-  golang SDK extension ships 1.27; any CI pin must be at least 1.26.1.
-- `vendor/` (~51 MiB) is committed for the offline Flatpak build. About
-  two thirds of it is the test server's own dependencies (gin and its JSON
-  and HTTP/3 stacks): `go mod vendor` includes test imports, though the
-  binary links none of them. After any `go.mod` change run
-  `go mod tidy && go mod vendor` and commit both.
+- `golang.org/x/mobile` is required (through the build-tagged `tools.go`)
+  at the version the build image's gomobile and gobind come from, so the
+  generator and the `bind/seq` runtime always match. Minimum version
+  selection takes `x/crypto`, `x/net`, `x/sys` and `x/text` to the versions
+  it requires.
+- `vendor/` (~51 MiB) is committed for offline builds (Hylki's Flatpak).
+  About two thirds of it is the test server's own dependencies: `go mod
+  vendor` includes test imports, though the library links none of them.
+  After any `go.mod` change run `go mod tidy && go mod vendor` and commit
+  both. gomobile cannot use `vendor/` (it binds from a temporary module of
+  its own), so `scripts/build-aar.sh` resolves the same versions from
+  `go.sum` through the module cache.
 
-## Flatpak packaging
-
-The manifest builds the helper and installs it to `/app/bin`, so the
-adapter finds it on `PATH` inside the sandbox:
-
-- The `hylki-proton` module runs `go build` with `GOFLAGS=-mod=vendor`
-  and `GOPROXY=off` from a `native/proton` dir source; the build sandbox has
-  no network.
-- `GOPATH` and `GOCACHE` point at the module's build directory, which is
-  writable in the sandbox.
-- The Go toolchain comes from the `org.freedesktop.Sdk.Extension.golang`
-  SDK extension. The GNOME SDK itself ships no `go`.
 
 ## Limits
 
@@ -467,3 +706,26 @@ adapter finds it on `PATH` inside the sandbox:
 - `all_ids` is skipped past 10 000 messages to stay inside the budget; use
   `since` for incremental sync.
 - Not yet validated against a live account.
+
+## License
+
+GPL-3.0-or-later (see `LICENSE`).
+
+The choice is not free: `protonsdk/sendprefs.go` is a port of Proton Mail
+Bridge's `smtp_prefs.go`, and Bridge is GPL-3.0-or-later, so the library is
+a derivative work under that licence. It is also the licence the helper
+has always carried: it began in [Postcard](https://github.com/tuna-os/postcard)
+(GPL-3.0-or-later) and moved into Hylki's tree under the same terms, and it
+is the licence [tuta-unofficial-sdk](https://github.com/tuna-os/tuta-unofficial-sdk)
+uses. The direct dependencies — go-proton-api, gopenpgp, go-srp, gluon
+(MIT) and go-crypto (BSD-3-Clause) — are permissive and impose only their
+notices, which the vendored copies keep. MIT for this repository would have
+meant rewriting the send-preference logic from scratch, and would have
+bought nothing for its consumers:
+
+- Hylki (AGPL-3.0-or-later) runs the helper as a separate program, and
+  GPLv3 §13 lets AGPLv3 and GPLv3 code be combined in any case.
+- An Android app links the library into its own process, so the app as a
+  whole is distributed under GPLv3 terms; Apache-2.0 code such as
+  Thunderbird for Android is compatible with that (one-way), and the same
+  already holds for the GPL-3.0 Tuta SDK.
