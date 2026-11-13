@@ -92,7 +92,7 @@ jobs:
           # Tag builds feed the release: they do not use a cache.
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
-      - uses: actions/setup-java@v4.9.1
+      - uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
           java-version: '21'
