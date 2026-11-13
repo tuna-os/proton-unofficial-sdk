@@ -116,7 +116,7 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon :proton-sdk-android:testDebugUnitTest :proton-sdk-android:dist
 
-      - uses: actions/upload-artifact@v4.6.2
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: proton-sdk-android
           path: android/proton-sdk-android/build/dist/*
