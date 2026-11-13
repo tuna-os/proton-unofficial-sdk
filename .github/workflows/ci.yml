@@ -34,7 +34,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v5.6.0
+      - uses: actions/setup-go@v7.0.0
         with:
           # The oldest Go the module builds with.
           go-version-file: go.mod
@@ -86,7 +86,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v5.6.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           # Tag builds feed the release: they do not use a cache.
