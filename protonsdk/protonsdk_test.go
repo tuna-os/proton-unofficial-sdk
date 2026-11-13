@@ -33,7 +33,7 @@ func TestMalformedRequestsAreRejected(t *testing.T) {
 		"missing version": `{"op":"sync"}`,
 		"float version":   `{"version":1.5,"op":"sync"}`,
 		"missing op":      `{"version":1}`,
-		"unknown op":      `{"version":1,"op":"star"}`,
+		"unknown op":      `{"version":1,"op":"no_such_op"}`,
 		"unknown field":   `{"version":1,"op":"revoke","session":{},"extra":1}`,
 		"sync sans limit": `{"version":1,"op":"sync","session":{}}`,
 		"read sans flag":  `{"version":1,"op":"mark_read","session":{},"ids":[]}`,

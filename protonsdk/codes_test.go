@@ -69,3 +69,46 @@ func TestEveryErrorCodeIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// documentedOperations is the op names the README's Operations section
+// gives a heading to; one heading may name several ops.
+func documentedOperations(t *testing.T) []string {
+	t.Helper()
+	readme, err := os.ReadFile("../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, ok := strings.Cut(string(readme), "\n## Operations\n")
+	if !ok {
+		t.Fatal("README has no Operations section")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	heading := regexp.MustCompile("(?m)^### (.+)$")
+	name := regexp.MustCompile("`([a-z_]+)`")
+	var ops []string
+	for _, match := range heading.FindAllStringSubmatch(section, -1) {
+		for _, op := range name.FindAllStringSubmatch(match[1], -1) {
+			ops = append(ops, op[1])
+		}
+	}
+	return ops
+}
+
+// The ops dispatch accepts are exactly the ops the README documents: a new
+// op ships documented, and a documented op is never one dispatch refuses.
+func TestEveryOperationIsDocumented(t *testing.T) {
+	documented := documentedOperations(t)
+	if len(documented) < 10 {
+		t.Fatalf("README Operations parsed as %v", documented)
+	}
+	for _, op := range documented {
+		if _, ok := operations[op]; !ok {
+			t.Errorf("README documents %s, which dispatch does not accept", op)
+		}
+	}
+	for op := range operations {
+		if !slices.Contains(documented, op) {
+			t.Errorf("%s is dispatched but has no heading under the README's Operations", op)
+		}
+	}
+}
