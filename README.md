@@ -747,7 +747,7 @@ Per-id outcome codes (`mark_read`, `move`, `star`, `label`, `delete`):
 
 ## Building and testing
 
-The Go module needs Go ≥ 1.26.1. Everything below is offline, from
+The Go module needs Go ≥ 1.26.11. Everything below is offline, from
 `vendor/`:
 
 ```sh

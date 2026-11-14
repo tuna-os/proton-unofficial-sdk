@@ -1,6 +1,6 @@
 module github.com/tuna-os/proton-unofficial-sdk
 
-go 1.26.1
+go 1.26.11
 
 require (
 	github.com/ProtonMail/gluon v0.17.1-0.20260225115619-c0f05c033a4a
