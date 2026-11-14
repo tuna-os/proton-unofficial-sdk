@@ -757,8 +757,9 @@ The Go module needs Go ≥ 1.26.11. Everything below is offline, from
 `vendor/`:
 
 ```sh
-gofmt -l protonsdk cmd                    # must print nothing
+gofmt -l protonsdk cmd tools.go           # must print nothing
 go vet -mod=vendor ./...
+go vet -mod=vendor -tags tools .          # tools.go is behind a build tag
 go test -mod=vendor ./...
 go build -mod=vendor -trimpath -o proton-helper ./cmd/proton-helper
 ```

@@ -6,6 +6,14 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Building needs Go 1.26.11 or newer (was 1.26.1). The `go` directive
+  picks the standard library inside the AAR and the helper, and 1.26.11 is
+  the first 1.26 release with the published `crypto/x509`, `crypto/tls`
+  and `net/http` fixes for paths this code calls. With `GOTOOLCHAIN=local`,
+  an older Go now stops with a version error instead of building.
+
 ### Fixed
 
 - `send`: a contact card whose signature does not verify against the
