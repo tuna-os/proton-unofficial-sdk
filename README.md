@@ -27,7 +27,7 @@ reply out, usable three ways:
 > account](#watching-an-account)), don't bulk-process mailboxes, and expect
 > that Proton can change or close the API at any time.
 
-The current release is 0.1.2. The protocol follows the needs of its
+The current release is 0.1.3. The protocol follows the needs of its
 first two users, Hylki's Proton support and the Tuna Mail Android app, and
 may still change; the envelope's `version` field guards incompatible
 changes.
@@ -131,7 +131,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("org.tunaos.proton:proton-sdk-android:0.1.2")
+    implementation("org.tunaos.proton:proton-sdk-android:0.1.3")
 }
 ```
 
