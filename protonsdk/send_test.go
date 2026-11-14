@@ -224,6 +224,107 @@ func TestSendToAnExternalRecipientWithAKeyUsesPGPMIME(t *testing.T) {
 	}
 }
 
+// pinnedCard is a contact's vCard as Proton's clients write it: one address
+// whose mail must be encrypted to the key the card pins.
+func pinnedCard(t *testing.T, address string, key *crypto.Key) string {
+	t.Helper()
+	public, err := key.GetPublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Frank\r\n" +
+		"item1.EMAIL:" + address + "\r\n" +
+		"item1.KEY:data:application/pgp-keys;base64," + base64.StdEncoding.EncodeToString(public) + "\r\n" +
+		"item1.X-PM-ENCRYPT:true\r\nitem1.X-PM-SIGN:true\r\n" +
+		"END:VCARD\r\n"
+}
+
+// serveContact answers the helper's contact lookups with one contact for
+// address, whose signed card is card under signer's signature.
+func (f *fixture) serveContact(address, card string, signer *crypto.KeyRing) {
+	f.t.Helper()
+	signature, err := signer.SignDetached(crypto.NewPlainMessageFromString(card))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	armored, err := signature.GetArmored()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.setIntercept(func(w http.ResponseWriter, r *http.Request, _ func(http.ResponseWriter)) bool {
+		var reply map[string]any
+		switch {
+		case r.Method != http.MethodGet:
+			return false
+		case r.URL.Path == "/contacts/v4/emails":
+			reply = map[string]any{"Code": 1000, "Total": 1, "ContactEmails": []map[string]any{
+				{"ID": "email1", "Email": address, "ContactID": "contact1"},
+			}}
+		case r.URL.Path == "/contacts/v4/contact1":
+			reply = map[string]any{"Code": 1000, "Contact": map[string]any{"ID": "contact1", "Cards": []map[string]any{
+				{"Type": proton.CardTypeSigned, "Data": card, "Signature": armored},
+			}}}
+		default:
+			return false
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(reply)
+		return true
+	})
+}
+
+func TestSendFollowsTheContactCardOrRefuses(t *testing.T) {
+	t.Run("a card that spells the address in another case still applies", func(t *testing.T) {
+		f := newFixture(t)
+		f.user("alice")
+		alice := loginAs(t, "alice")
+		key, err := crypto.GenerateKey("Frank", "frank@example.org", "x25519", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.serveContact("Frank@Example.org", pinnedCard(t, "Frank@Example.org", key), f.account("alice").userKR)
+
+		result(t, call(t, sendRequest(alice, to("frank@example.org"), nil)))
+		pkg := f.lastSend().Packages[0]
+		recipient := pkg.Addresses["frank@example.org"]
+		if pkg.Type != proton.PGPMIMEScheme || recipient == nil || pkg.BodyKey != nil {
+			t.Fatalf("a contact whose card demands encryption got package %+v", pkg)
+		}
+		keyPacket, err := base64.StdEncoding.DecodeString(recipient.BodyKeyPacket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ring, err := crypto.NewKeyRing(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ring.DecryptSessionKey(keyPacket); err != nil {
+			t.Fatalf("the pinned key cannot open the body key: %v", err)
+		}
+	})
+	t.Run("a card the account's keys did not sign refuses the send", func(t *testing.T) {
+		f := newFixture(t)
+		f.user("alice")
+		alice := loginAs(t, "alice")
+		key, err := crypto.GenerateKey("Frank", "frank@example.org", "x25519", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stranger, err := crypto.NewKeyRing(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.serveContact("frank@example.org", pinnedCard(t, "frank@example.org", key), stranger)
+
+		if code := errorCode(t, call(t, sendRequest(alice, to("frank@example.org"), nil))); code != "send_failed" {
+			t.Fatalf("code = %q, want send_failed", code)
+		}
+		if f.sendCount() != 0 || len(draftsOf(t, f)) != 0 {
+			t.Fatal("a send refused over its contact card wrote something")
+		}
+	})
+}
+
 func TestSendRefusesBeforeWritingAnything(t *testing.T) {
 	f := newFixture(t)
 	f.user("alice")

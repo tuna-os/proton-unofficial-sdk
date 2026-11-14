@@ -416,11 +416,39 @@ func (s *apiSession) contactSettings(ctx context.Context, userKR *crypto.KeyRing
 	if err != nil {
 		return proton.ContactSettings{}, s.preSubmit(err)
 	}
-	settings, err := contact.GetSettings(userKR, address, proton.CardTypeSigned)
-	if err != nil {
+	settings, ok := cardSettings(contact, userKR, address)
+	if !ok {
 		return proton.ContactSettings{}, "send_failed"
 	}
 	return settings, ""
+}
+
+// The vCard property a contact card lists its addresses under.
+const vcardEmail = "EMAIL"
+
+// cardSettings reads address's settings from the contact's signed card, and
+// reports false for a card that does not verify against the user's keys or
+// settings that do not parse. go-proton-api's GetSettings cannot say so: a
+// card it could not verify, and an address the card spells in another case,
+// both come back as empty settings without an error, which would send in
+// cleartext to a contact whose card demands encryption. So the card is
+// verified here first, and the address is looked up as the card spells it.
+func cardSettings(contact proton.Contact, userKR *crypto.KeyRing, address string) (proton.ContactSettings, bool) {
+	card, ok := contact.Cards.Get(proton.CardTypeSigned)
+	if !ok {
+		return proton.ContactSettings{}, true
+	}
+	fields, err := card.Get(userKR, vcardEmail)
+	if err != nil {
+		return proton.ContactSettings{}, false
+	}
+	for _, field := range fields {
+		if strings.EqualFold(field.Value, address) {
+			settings, err := contact.GetSettings(userKR, field.Value, proton.CardTypeSigned)
+			return settings, err == nil
+		}
+	}
+	return proton.ContactSettings{}, true
 }
 
 // withReplyTos adds Reply-To addresses to the draft-create body, which
