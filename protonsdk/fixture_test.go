@@ -156,6 +156,8 @@ type account struct {
 	client  *proton.Client
 	address proton.Address
 	addrKR  *crypto.KeyRing
+	// userKR signs what the account vouches for, such as contact cards.
+	userKR *crypto.KeyRing
 }
 
 func (f *fixture) account(name string) account {
@@ -182,11 +184,11 @@ func (f *fixture) account(name string) account {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	_, addrKRs, err := proton.Unlock(user, addresses, keyPass, async.NoopPanicHandler{})
+	userKR, addrKRs, err := proton.Unlock(user, addresses, keyPass, async.NoopPanicHandler{})
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return account{client: client, address: addresses[0], addrKR: addrKRs[addresses[0].ID]}
+	return account{client: client, address: addresses[0], addrKR: addrKRs[addresses[0].ID], userKR: userKR}
 }
 
 // deliver imports a message into the account's inbox.

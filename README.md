@@ -555,6 +555,12 @@ otherwise — over TLS. With `delivery: "secure"`, a recipient that would get
 cleartext refuses the whole send with `confidential_send_unsupported`
 (password-protected external mail is not implemented).
 
+A recipient's contact card is read under the spelling the card itself uses
+for the address, and only after its signature verifies against the
+account's keys. A card that does not verify refuses the send with
+`send_failed` instead of being ignored: it may be what pins the key or asks
+for encryption.
+
 Then a draft is created (body encrypted to the sender's key, Reply-To and
 the Message-ID set), attachments are uploaded encrypted, and the packages
 go out in one submit. Bcc recipients get their packages like everyone else

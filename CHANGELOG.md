@@ -4,6 +4,17 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
+## [Unreleased]
+
+### Fixed
+
+- `send`: a contact card whose signature does not verify against the
+  account's keys now refuses the send (`send_failed`), and a card that
+  spells the recipient's address in another case is applied. Both used to
+  be read as "no settings", so mail to a contact whose card demands
+  encryption to a pinned key could go out in cleartext under
+  `delivery: "ordinary"`.
+
 ## [0.1.2] - 2026-11-07
 
 ### Added
