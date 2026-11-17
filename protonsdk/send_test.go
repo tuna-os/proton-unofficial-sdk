@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -323,6 +324,113 @@ func TestSendFollowsTheContactCardOrRefuses(t *testing.T) {
 			t.Fatal("a send refused over its contact card wrote something")
 		}
 	})
+	// The card pins one key and the key server answers with another: for an
+	// outside address as WKD would, for a Proton address with the account's
+	// own key.
+	for name, recipient := range map[string]string{
+		"a pinned key the key server replaced refuses an outside recipient": "frank@example.org",
+		"a pinned key the key server replaced refuses a Proton recipient":   "bob@proton.local",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.user("alice")
+			f.user("bob")
+			alice := loginAs(t, "alice")
+			pinned, err := crypto.GenerateKey("Frank", recipient, "x25519", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.externalKeys["frank@example.org"] = armoredPublic(t, "frank@example.org")
+			f.mu.Unlock()
+			f.serveContact(recipient, pinnedCard(t, recipient, pinned), f.account("alice").userKR)
+
+			for _, delivery := range []string{deliveryOrdinary, deliverySecure} {
+				reply := call(t, sendRequest(alice, to(recipient), map[string]any{"delivery": delivery}))
+				if code := errorCode(t, reply); code != "send_failed" {
+					t.Fatalf("%s delivery: code = %q, want send_failed", delivery, code)
+				}
+			}
+			if f.sendCount() != 0 || len(draftsOf(t, f)) != 0 {
+				t.Fatal("a send refused over a replaced key wrote something")
+			}
+		})
+	}
+	t.Run("a pinned key the key server also offers is used", func(t *testing.T) {
+		f := newFixture(t)
+		f.user("alice")
+		alice := loginAs(t, "alice")
+		key, err := crypto.GenerateKey("Frank", "frank@example.org", "x25519", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		public, err := key.GetArmoredPublicKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		f.externalKeys["frank@example.org"] = public
+		f.mu.Unlock()
+		f.serveContact("frank@example.org", pinnedCard(t, "frank@example.org", key), f.account("alice").userKR)
+
+		result(t, call(t, sendRequest(alice, to("frank@example.org"), map[string]any{"delivery": deliverySecure})))
+		pkg := f.lastSend().Packages[0]
+		recipient := pkg.Addresses["frank@example.org"]
+		if pkg.Type != proton.PGPMIMEScheme || recipient == nil || pkg.BodyKey != nil {
+			t.Fatalf("a contact whose pinned key is still served got package %+v", pkg)
+		}
+		keyPacket, err := base64.StdEncoding.DecodeString(recipient.BodyKeyPacket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ring, err := crypto.NewKeyRing(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ring.DecryptSessionKey(keyPacket); err != nil {
+			t.Fatalf("the pinned key cannot open the body key: %v", err)
+		}
+	})
+}
+
+// armoredPublic is a fresh key for address, as a key server would serve it.
+func armoredPublic(t *testing.T, address string) string {
+	t.Helper()
+	key, err := crypto.GenerateKey("Someone", address, "x25519", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := key.GetArmoredPublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return public
+}
+
+// A card may say not to encrypt to keys it does not pin. Then a replaced key
+// is not a refusal: nothing is encrypted to it, so the recipient gets
+// cleartext, which secure delivery refuses on its own.
+func TestAReplacedPinnedKeyIsNotUsedWhenTheCardDeclinesUntrustedKeys(t *testing.T) {
+	pinned, err := crypto.GenerateKey("Frank", "frank@example.org", "x25519", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := []proton.PublicKey{{Flags: proton.KeyStateTrusted | proton.KeyStateActive, PublicKey: armoredPublic(t, "frank@example.org")}}
+	no := false
+	card := proton.ContactSettings{Keys: []*crypto.Key{pinned}, EncryptUntrusted: &no}
+
+	prefs, err := buildSendPrefs(card, proton.MailSettings{}, served, rfc822.TextHTML, false)
+	if err != nil {
+		t.Fatalf("a card that declines untrusted keys refused the send: %v", err)
+	}
+	if prefs.Encrypt || prefs.PubKey != nil {
+		t.Fatalf("prefs = %+v, want cleartext with no key", prefs)
+	}
+
+	card.EncryptUntrusted = nil
+	if _, err := buildSendPrefs(card, proton.MailSettings{}, served, rfc822.TextHTML, false); !errors.Is(err, errPinnedKeyReplaced) {
+		t.Fatalf("err = %v, want errPinnedKeyReplaced", err)
+	}
 }
 
 func TestSendRefusesBeforeWritingAnything(t *testing.T) {

@@ -4,8 +4,10 @@ package protonsdk
 // (internal/services/smtp/smtp_prefs.go, GPL-3.0-or-later): the same
 // decision table the official clients apply, so a recipient gets the same
 // encryption, signing and MIME format from this helper as from Proton's own
-// apps. Deviations: panics on malformed contact data are errors, and a key
-// the API marks as no longer active is skipped while an active one exists.
+// apps. Deviations: panics on malformed contact data are errors, a key the
+// API marks as no longer active is skipped while an active one exists, and
+// a contact card that pins keys refuses the send when the API offers none of
+// them, where Bridge would encrypt to the API's key.
 
 import (
 	"errors"
@@ -21,7 +23,10 @@ const (
 	pmInternal = "internal"
 )
 
-var errNoRecipientKey = errors.New("recipient needs a key but none was usable")
+var (
+	errNoRecipientKey    = errors.New("recipient needs a key but none was usable")
+	errPinnedKeyReplaced = errors.New("the contact card pins keys and the API offers none of them")
+)
 
 type contactPrefs struct {
 	keys             []*crypto.Key
@@ -207,6 +212,11 @@ func (b *sendPrefsBuilder) setPGPSettings(vcard contactPrefs, apiKeys []proton.P
 			b.withMIMEType(rfc822.TextPlain)
 		}
 		key, err := pickSendingKey(vcard, usable)
+		if errors.Is(err, errPinnedKeyReplaced) && !vcard.encryptUntrusted {
+			// The card says not to encrypt to keys it does not pin, so
+			// nothing is encrypted and no key is needed.
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -257,8 +267,11 @@ func usableAPIKeys(keys []proton.PublicKey) []proton.PublicKey {
 	return usable
 }
 
-// pickSendingKey prefers an API key the contact card pins, then the first
-// active API key, then the first API key at all.
+// pickSendingKey is an API key the contact card pins, or, when the card pins
+// none, the first active API key, then the first API key at all. A card that
+// pins keys while the API offers only others is errPinnedKeyReplaced: the
+// pin is the user's statement of which key is the recipient's, and a
+// different key from the key server is exactly what it guards against.
 func pickSendingKey(vcard contactPrefs, rawAPIKeys []proton.PublicKey) (*crypto.KeyRing, error) {
 	var apiKeys, activeKeys []*crypto.Key
 	for _, raw := range rawAPIKeys {
@@ -282,6 +295,9 @@ func pickSendingKey(vcard contactPrefs, rawAPIKeys []proton.PublicKey) (*crypto.
 		if pinned[key.GetFingerprint()] {
 			return crypto.NewKeyRing(key)
 		}
+	}
+	if len(pinned) > 0 {
+		return nil, errPinnedKeyReplaced
 	}
 	if len(activeKeys) > 0 {
 		return crypto.NewKeyRing(activeKeys[0])

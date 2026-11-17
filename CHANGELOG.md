@@ -4,6 +4,18 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
+## [Unreleased]
+
+### Fixed
+
+- `send`: when a contact card pins keys for a recipient and the API offers
+  only other keys for that address, the send is refused (`send_failed`).
+  It used to be encrypted to the API's key and reported as sent, so a key
+  replaced on the key server (or published through WKD by whoever controls
+  the recipient's domain) silently overrode the key the user had pinned.
+  A card that declines encryption to keys it does not pin still gets
+  cleartext.
+
 ## [0.1.3] - 2026-11-14
 
 ### Changed
