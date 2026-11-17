@@ -561,6 +561,16 @@ account's keys. A card that does not verify refuses the send with
 `send_failed` instead of being ignored: it may be what pins the key or asks
 for encryption.
 
+A card that pins keys for the address decides which key is the recipient's.
+When the API offers keys for that address and none of them is pinned, the
+send is refused with `send_failed` rather than encrypted to the API's key:
+a key the key server swapped is what a pin guards against. This is where
+the table leaves Bridge, which would use the API's key; Proton's web client
+refuses as well. To send again, the user trusts the new key (or removes
+the old one) in the contact. One exception: a card that says not to encrypt
+to keys it does not pin gets cleartext, as it asked, and `secure` delivery
+refuses that as usual.
+
 Then a draft is created (body encrypted to the sender's key, Reply-To and
 the Message-ID set), attachments are uploaded encrypted, and the packages
 go out in one submit. Bcc recipients get their packages like everyone else
