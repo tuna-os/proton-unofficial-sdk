@@ -15,6 +15,12 @@ All notable changes to this project are listed here. The format follows
   the recipient's domain) silently overrode the key the user had pinned.
   A card that declines encryption to keys it does not pin still gets
   cleartext.
+- `send`: a pinned key the API still lists but no longer marks active,
+  because its owner retired it as obsolete or compromised, is no longer
+  encrypted to while the API marks another key active. The send is refused
+  (`send_failed`) until the card pins an active key. It used to go out
+  encrypted to the retired key, since any pinned key the API listed was
+  taken before the API's own choice.
 
 ## [0.1.3] - 2026-11-14
 
