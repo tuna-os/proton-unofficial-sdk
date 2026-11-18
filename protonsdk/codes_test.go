@@ -112,3 +112,79 @@ func TestEveryOperationIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// The Kotlin wrapper keeps its own copy of the contract: ProtonErrorCode
+// lists the codes by hand and ProtonAccount/ProtonClient name each op as a
+// string. Nothing in the Gradle build reads the README, so these tests hold
+// that copy to it from here, where go test runs on every pull request.
+const kotlinSources = "../android/proton-sdk-android/src/main/kotlin/org/tunaos/proton"
+
+func readKotlin(t *testing.T, name string) string {
+	t.Helper()
+	text, err := os.ReadFile(filepath.Join(kotlinSources, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(text)
+}
+
+// ProtonErrorCode carries every documented code and nothing else. A code
+// missing from it reaches an Android caller as UNKNOWN and is thrown as
+// ProtonException.Failed instead of the class that says what to do about
+// it. not_attempted is the one per-id outcome code that never fills an
+// envelope, so it is documented beside the batch ops, not in the table.
+func TestKotlinErrorCodesMatchTheReadme(t *testing.T) {
+	documented := documentedCodes(t)
+	if len(documented) < 30 {
+		t.Fatalf("README table parsed as %v", documented)
+	}
+	expected := append(slices.Clone(documented), "not_attempted")
+	source := readKotlin(t, "ProtonErrors.kt")
+	body, _, ok := strings.Cut(source, "public companion object")
+	if !ok || !strings.Contains(body, "enum class ProtonErrorCode") {
+		t.Fatal("ProtonErrors.kt has no ProtonErrorCode enum")
+	}
+	entry := regexp.MustCompile(`(?m)^\s+[A-Z_]+\("([a-z_]*)"\),$`)
+	var mirrored []string
+	for _, match := range entry.FindAllStringSubmatch(body, -1) {
+		if match[1] != "" { // UNKNOWN
+			mirrored = append(mirrored, match[1])
+		}
+	}
+	for _, code := range expected {
+		if !slices.Contains(mirrored, code) {
+			t.Errorf("%s is documented but missing from the Kotlin ProtonErrorCode", code)
+		}
+	}
+	for _, code := range mirrored {
+		if !slices.Contains(expected, code) {
+			t.Errorf("the Kotlin ProtonErrorCode has %s, which the README does not document", code)
+		}
+	}
+}
+
+// The wrapper sends exactly the ops dispatch accepts: a misspelt op fails
+// only at runtime as invalid_request, and an op the wrapper never sends is
+// one an Android caller cannot reach.
+func TestKotlinWrapperSendsEveryOperation(t *testing.T) {
+	op := regexp.MustCompile(`\bcall\("([a-z_]+)"\)|put\("op", "([a-z_]+)"\)`)
+	sent := map[string]bool{}
+	for _, name := range []string{"ProtonAccount.kt", "ProtonClient.kt"} {
+		for _, match := range op.FindAllStringSubmatch(readKotlin(t, name), -1) {
+			sent[match[1]+match[2]] = true
+		}
+	}
+	if !sent["login"] || !sent["revoke"] {
+		t.Fatalf("the scan missed login or revoke, found %v: tighten the pattern", sent)
+	}
+	for name := range sent {
+		if _, ok := operations[name]; !ok {
+			t.Errorf("the Kotlin wrapper sends %s, which dispatch does not accept", name)
+		}
+	}
+	for name := range operations {
+		if !sent[name] {
+			t.Errorf("%s is dispatched but the Kotlin wrapper never sends it", name)
+		}
+	}
+}
