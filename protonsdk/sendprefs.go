@@ -7,7 +7,8 @@ package protonsdk
 // apps. Deviations: panics on malformed contact data are errors, a key the
 // API marks as no longer active is skipped while an active one exists, and
 // a contact card that pins keys refuses the send when the API offers none of
-// them, where Bridge would encrypt to the API's key.
+// them for encryption, where Bridge would encrypt to the API's key, or to a
+// pinned key the API has retired.
 
 import (
 	"errors"
@@ -25,7 +26,7 @@ const (
 
 var (
 	errNoRecipientKey    = errors.New("recipient needs a key but none was usable")
-	errPinnedKeyReplaced = errors.New("the contact card pins keys and the API offers none of them")
+	errPinnedKeyReplaced = errors.New("the contact card pins keys and the API offers none of them for encryption")
 )
 
 type contactPrefs struct {
@@ -267,11 +268,15 @@ func usableAPIKeys(keys []proton.PublicKey) []proton.PublicKey {
 	return usable
 }
 
-// pickSendingKey is an API key the contact card pins, or, when the card pins
-// none, the first active API key, then the first API key at all. A card that
-// pins keys while the API offers only others is errPinnedKeyReplaced: the
-// pin is the user's statement of which key is the recipient's, and a
-// different key from the key server is exactly what it guards against.
+// pickSendingKey chooses among the keys the API wants mail encrypted to: its
+// active keys, or all of them when it marks none active. The choice is one
+// the contact card pins, or, when the card pins none, the first. A card that
+// pins keys while none of those is pinned is errPinnedKeyReplaced: the pin
+// is the user's statement of which key is the recipient's, and a different
+// key from the key server is exactly what it guards against. That holds for
+// a pinned key the API still lists but no longer marks active, too: its
+// owner retired it, as obsolete or as compromised, and mail now belongs
+// under a key the user has not trusted yet.
 func pickSendingKey(vcard contactPrefs, rawAPIKeys []proton.PublicKey) (*crypto.KeyRing, error) {
 	var apiKeys, activeKeys []*crypto.Key
 	for _, raw := range rawAPIKeys {
@@ -287,11 +292,15 @@ func pickSendingKey(vcard contactPrefs, rawAPIKeys []proton.PublicKey) (*crypto.
 	if len(apiKeys) == 0 {
 		return nil, errNoRecipientKey
 	}
+	candidates := activeKeys
+	if len(candidates) == 0 {
+		candidates = apiKeys
+	}
 	pinned := make(map[string]bool, len(vcard.keys))
 	for _, key := range vcard.keys {
 		pinned[key.GetFingerprint()] = true
 	}
-	for _, key := range apiKeys {
+	for _, key := range candidates {
 		if pinned[key.GetFingerprint()] {
 			return crypto.NewKeyRing(key)
 		}
@@ -299,10 +308,7 @@ func pickSendingKey(vcard contactPrefs, rawAPIKeys []proton.PublicKey) (*crypto.
 	if len(pinned) > 0 {
 		return nil, errPinnedKeyReplaced
 	}
-	if len(activeKeys) > 0 {
-		return crypto.NewKeyRing(activeKeys[0])
-	}
-	return crypto.NewKeyRing(apiKeys[0])
+	return crypto.NewKeyRing(candidates[0])
 }
 
 func (b *sendPrefsBuilder) setEncryptionPreferences(mail proton.MailSettings) {

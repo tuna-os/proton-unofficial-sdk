@@ -433,6 +433,67 @@ func TestAReplacedPinnedKeyIsNotUsedWhenTheCardDeclinesUntrustedKeys(t *testing.
 	}
 }
 
+// The key server may still list a key it no longer wants mail encrypted to:
+// its owner marked it obsolete or compromised and made another key the
+// active one. A pin on such a key is a pin on a replaced key.
+func TestAPinnedKeyTheKeyServerRetiredIsNotUsed(t *testing.T) {
+	generate := func() (*crypto.Key, string) {
+		key, err := crypto.GenerateKey("Frank", "frank@example.org", "x25519", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		public, err := key.GetArmoredPublicKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key, public
+	}
+	retired, retiredPublic := generate()
+	current, currentPublic := generate()
+	usesKey := func(prefs proton.SendPreferences, key *crypto.Key) bool {
+		return prefs.Encrypt && prefs.PubKey != nil && prefs.PubKey.CountEntities() == 1 &&
+			prefs.PubKey.GetKeys()[0].GetFingerprint() == key.GetFingerprint()
+	}
+
+	for name, retiredFlags := range map[string]proton.KeyState{
+		"obsolete":    proton.KeyStateTrusted,
+		"compromised": 0,
+	} {
+		served := []proton.PublicKey{
+			{Flags: retiredFlags, PublicKey: retiredPublic},
+			{Flags: proton.KeyStateTrusted | proton.KeyStateActive, PublicKey: currentPublic},
+		}
+		for _, isInternal := range []bool{false, true} {
+			card := proton.ContactSettings{Keys: []*crypto.Key{retired}}
+			if _, err := buildSendPrefs(card, proton.MailSettings{}, served, rfc822.TextHTML, isInternal); !errors.Is(err, errPinnedKeyReplaced) {
+				t.Fatalf("%s pinned key, internal %v: err = %v, want errPinnedKeyReplaced", name, isInternal, err)
+			}
+
+			// Once the card pins the active key as well, that one is used.
+			card.Keys = []*crypto.Key{retired, current}
+			prefs, err := buildSendPrefs(card, proton.MailSettings{}, served, rfc822.TextHTML, isInternal)
+			if err != nil {
+				t.Fatalf("%s pinned key beside the active one, internal %v: %v", name, isInternal, err)
+			}
+			if !usesKey(prefs, current) {
+				t.Fatalf("%s pinned key beside the active one, internal %v: prefs = %+v, want the active key", name, isInternal, prefs)
+			}
+		}
+	}
+
+	// A reply that marks no key active says nothing about which to prefer,
+	// so the pinned key is still used.
+	unmarked := []proton.PublicKey{{PublicKey: retiredPublic}}
+	card := proton.ContactSettings{Keys: []*crypto.Key{retired}}
+	prefs, err := buildSendPrefs(card, proton.MailSettings{}, unmarked, rfc822.TextHTML, false)
+	if err != nil {
+		t.Fatalf("a pinned key in a reply without active marks refused the send: %v", err)
+	}
+	if !usesKey(prefs, retired) {
+		t.Fatalf("prefs = %+v, want the pinned key", prefs)
+	}
+}
+
 func TestSendRefusesBeforeWritingAnything(t *testing.T) {
 	f := newFixture(t)
 	f.user("alice")
