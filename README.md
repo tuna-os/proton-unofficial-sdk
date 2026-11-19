@@ -777,6 +777,20 @@ go test -mod=vendor ./...
 go build -mod=vendor -trimpath -o proton-helper ./cmd/proton-helper
 ```
 
+CI also gates every pull request on `govulncheck`
+(`.github/workflows/govulncheck.yml`). It fails when a known advisory has a
+call path from `protonsdk/` or `cmd/`, which is most likely after a
+dependency bump. Unlike the checks above, it needs the network to fetch
+the vulnerability database. Its standard-library findings depend on the
+Go that runs it, so use the version in `go.mod`, as CI does; a newer local
+Go can report advisories that CI does not:
+
+```sh
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')" GOFLAGS=-mod=vendor \
+  "$(go env GOPATH)/bin/govulncheck" ./protonsdk/... ./cmd/...
+```
+
 The tests run go-proton-api's own in-process API server
 (`github.com/ProtonMail/go-proton-api/server`) behind a reverse proxy the
 tests control, and drive the library through its real framing: login →
