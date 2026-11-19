@@ -7,6 +7,7 @@ package packet
 import (
 	"bytes"
 	"crypto"
+	"crypto/cipher"
 	"crypto/rsa"
 	"encoding/binary"
 	"encoding/hex"
@@ -17,12 +18,11 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/ecdh"
 	"github.com/ProtonMail/go-crypto/openpgp/elgamal"
 	"github.com/ProtonMail/go-crypto/openpgp/errors"
-	"github.com/ProtonMail/go-crypto/openpgp/internal/algorithm"
 	"github.com/ProtonMail/go-crypto/openpgp/internal/encoding"
 	"github.com/ProtonMail/go-crypto/openpgp/mlkem_ecdh"
-	"github.com/ProtonMail/go-crypto/openpgp/symmetric"
 	"github.com/ProtonMail/go-crypto/openpgp/x25519"
 	"github.com/ProtonMail/go-crypto/openpgp/x448"
+	"golang.org/x/crypto/hkdf"
 )
 
 // EncryptedKey represents a public-key encrypted session key. See RFC 4880,
@@ -36,15 +36,13 @@ type EncryptedKey struct {
 	CipherFunc     CipherFunction // only valid after a successful Decrypt for a v3 packet
 	Key            []byte         // only valid after a successful Decrypt
 
-	encryptedMPI1         encoding.Field    // Only valid in RSA, Elgamal, ECDH, AEAD and PQC keys
-	encryptedMPI2         encoding.Field    // Only valid in Elgamal, ECDH and PQC keys
-	encryptedMPI3         encoding.Field    // Only valid in PQC keys
-	ephemeralPublicX25519 *x25519.PublicKey // used for x25519
-	ephemeralPublicX448   *x448.PublicKey   // used for x448
-	encryptedSession      []byte            // used for x25519 and x448
-
-	nonce    []byte
-	aeadMode algorithm.AEADMode
+	encryptedMPI1        encoding.Field // used for RSA, Elgamal and ECDH
+	encryptedMPI2        encoding.Field // used for Elgamal and ECDH
+	ephemeralPublicEcc   []byte         // used for X25519, X448 and ML-KEM
+	ephemeralPublicMlKem []byte         // used for ML-KEM
+	encryptedSession     []byte         // used for X25519, X448, ML-KEM and AEAD
+	aeadSalt             []byte         // used for AEAD
+	aeadMode             AEADMode       // used for AEAD
 }
 
 func (e *EncryptedKey) parse(r io.Reader) (err error) {
@@ -106,6 +104,24 @@ func (e *EncryptedKey) parse(r io.Reader) (err error) {
 	e.Algo = PublicKeyAlgorithm(buf[0])
 	var cipherFunction byte
 	switch e.Algo {
+	case PubKeyAlgoAEAD:
+		_, err = readFull(r, buf[:1])
+		if err != nil {
+			return
+		}
+		e.aeadMode = AEADMode(buf[0])
+		if !e.aeadMode.IsSupported() {
+			return errors.UnsupportedError("unsupported AEAD mode in PKESK")
+		}
+		e.aeadSalt = make([]byte, 32)
+		_, err = readFull(r, e.aeadSalt)
+		if err != nil {
+			return
+		}
+		e.encryptedSession, err = io.ReadAll(r)
+		if err != nil {
+			return
+		}
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly:
 		e.encryptedMPI1 = new(encoding.MPI)
 		if _, err = e.encryptedMPI1.ReadFrom(r); err != nil {
@@ -132,42 +148,21 @@ func (e *EncryptedKey) parse(r io.Reader) (err error) {
 			return
 		}
 	case PubKeyAlgoX25519:
-		e.ephemeralPublicX25519, e.encryptedSession, cipherFunction, err = x25519.DecodeFields(r, e.Version == 6)
+		e.ephemeralPublicEcc, e.encryptedSession, cipherFunction, err = x25519.DecodeFields(r, e.Version == 6)
 		if err != nil {
 			return
 		}
 	case PubKeyAlgoX448:
-		e.ephemeralPublicX448, e.encryptedSession, cipherFunction, err = x448.DecodeFields(r, e.Version == 6)
+		e.ephemeralPublicEcc, e.encryptedSession, cipherFunction, err = x448.DecodeFields(r, e.Version == 6)
 		if err != nil {
-			return
-		}
-	case PubKeyAlgoAEAD:
-		ivAndCiphertext, err := io.ReadAll(r)
-		if err != nil {
-			return err
-		}
-		e.encryptedMPI1 = encoding.NewOctetArray(ivAndCiphertext)
-	case ExperimentalPubKeyAlgoAEAD:
-		var aeadMode [1]byte
-		if _, err = readFull(r, aeadMode[:]); err != nil {
-			return
-		}
-		e.aeadMode = algorithm.AEADMode(aeadMode[0])
-		nonceLength := e.aeadMode.NonceLength()
-		e.nonce = make([]byte, nonceLength)
-		if _, err = readFull(r, e.nonce); err != nil {
-			return
-		}
-		e.encryptedMPI1 = new(encoding.ShortByteString)
-		if _, err = e.encryptedMPI1.ReadFrom(r); err != nil {
 			return
 		}
 	case PubKeyAlgoMlkem768X25519:
-		if e.encryptedMPI1, e.encryptedMPI2, e.encryptedMPI3, cipherFunction, err = mlkem_ecdh.DecodeFields(r, 32, 1088, e.Version == 6); err != nil {
+		if e.ephemeralPublicEcc, e.ephemeralPublicMlKem, e.encryptedSession, cipherFunction, err = mlkem_ecdh.DecodeFields(r, 32, 1088, e.Version == 6); err != nil {
 			return err
 		}
 	case PubKeyAlgoMlkem1024X448:
-		if e.encryptedMPI1, e.encryptedMPI2, e.encryptedMPI3, cipherFunction, err = mlkem_ecdh.DecodeFields(r, 56, 1568, e.Version == 6); err != nil {
+		if e.ephemeralPublicEcc, e.ephemeralPublicMlKem, e.encryptedSession, cipherFunction, err = mlkem_ecdh.DecodeFields(r, 56, 1568, e.Version == 6); err != nil {
 			return err
 		}
 	}
@@ -206,6 +201,35 @@ func (e *EncryptedKey) Decrypt(priv *PrivateKey, config *Config) error {
 	// TODO(agl): use session key decryption routines here to avoid
 	// padding oracle attacks.
 	switch priv.PubKeyAlgo {
+	case PubKeyAlgoAEAD:
+		var pk *PersistentSymmetricKeyPublicFields
+		var sk *PersistentSymmetricKeyPrivateFields
+		pk, sk, err = priv.persistentSymmetricKeyFields()
+		if err != nil {
+			return err
+		}
+		packetID := 0xC0 | packetTypeEncryptedKey
+		version := e.Version
+		info := []byte{byte(packetID), byte(version), byte(pk.SymmetricAlgorithm), byte(e.aeadMode)}
+		hkdf := hkdf.New(crypto.SHA512.New, sk.Key, e.aeadSalt, info)
+		keySize := pk.SymmetricAlgorithm.KeySize()
+		ivLength := e.aeadMode.IvLength()
+		encKey := make([]byte, keySize)
+		iv := make([]byte, ivLength)
+		_, err = hkdf.Read(encKey)
+		if err != nil {
+			return err
+		}
+		_, err = hkdf.Read(iv)
+		if err != nil {
+			return err
+		}
+		var modeInstance cipher.AEAD
+		modeInstance, err = e.aeadMode.new(pk.SymmetricAlgorithm.new(encKey))
+		if err != nil {
+			return err
+		}
+		b, err = modeInstance.Open(b, iv, e.encryptedSession, []byte{})
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly:
 		// Supports both *rsa.PrivateKey and crypto.Decrypter
 		k := priv.PrivateKey.(crypto.Decrypter)
@@ -225,21 +249,11 @@ func (e *EncryptedKey) Decrypt(priv *PrivateKey, config *Config) error {
 		}
 		b, err = ecdh.Decrypt(priv.PrivateKey.(*ecdh.PrivateKey), vsG, m, oid, fp)
 	case PubKeyAlgoX25519:
-		b, err = x25519.Decrypt(priv.PrivateKey.(*x25519.PrivateKey), e.ephemeralPublicX25519, e.encryptedSession)
+		b, err = x25519.Decrypt(priv.PrivateKey.(*x25519.PrivateKey), e.ephemeralPublicEcc, e.encryptedSession)
 	case PubKeyAlgoX448:
-		b, err = x448.Decrypt(priv.PrivateKey.(*x448.PrivateKey), e.ephemeralPublicX448, e.encryptedSession)
-	case PubKeyAlgoAEAD:
-		priv := priv.PrivateKey.(*symmetric.AEADPrivateKey)
-		b, err = priv.Decrypt(e.encryptedMPI1.Bytes(), priv.PublicKey.AEADMode)
-	case ExperimentalPubKeyAlgoAEAD:
-		priv := priv.PrivateKey.(*symmetric.ExperimentalAEADPrivateKey)
-		b, err = priv.Decrypt(e.nonce, e.encryptedMPI1.Bytes(), e.aeadMode)
+		b, err = x448.Decrypt(priv.PrivateKey.(*x448.PrivateKey), e.ephemeralPublicEcc, e.encryptedSession)
 	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
-		ecE := e.encryptedMPI1.Bytes()
-		kE := e.encryptedMPI2.Bytes()
-		m := e.encryptedMPI3.Bytes()
-
-		b, err = mlkem_ecdh.Decrypt(priv.PrivateKey.(*mlkem_ecdh.PrivateKey), kE, ecE, m)
+		b, err = mlkem_ecdh.Decrypt(priv.PrivateKey.(*mlkem_ecdh.PrivateKey), e.ephemeralPublicMlKem, e.ephemeralPublicEcc, e.encryptedSession)
 	default:
 		err = errors.InvalidArgumentError("cannot decrypt encrypted session key with private key of type " + strconv.Itoa(int(priv.PubKeyAlgo)))
 	}
@@ -249,9 +263,25 @@ func (e *EncryptedKey) Decrypt(priv *PrivateKey, config *Config) error {
 
 	var key []byte
 	switch priv.PubKeyAlgo {
-	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH, PubKeyAlgoAEAD, ExperimentalPubKeyAlgoAEAD:
+	case PubKeyAlgoAEAD:
 		keyOffset := 0
 		if e.Version < 6 {
+			if len(b) == 0 {
+				return errors.StructuralError("truncated session key")
+			}
+			e.CipherFunc = CipherFunction(b[0])
+			keyOffset = 1
+			if !e.CipherFunc.IsSupported() {
+				return errors.UnsupportedError("unsupported encryption function")
+			}
+		}
+		key = b[keyOffset:]
+	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH:
+		keyOffset := 0
+		if e.Version < 6 {
+			if len(b) == 0 {
+				return errors.StructuralError("truncated session key")
+			}
 			e.CipherFunc = CipherFunction(b[0])
 			keyOffset = 1
 			if !e.CipherFunc.IsSupported() {
@@ -283,6 +313,8 @@ func (e *EncryptedKey) Decrypt(priv *PrivateKey, config *Config) error {
 func (e *EncryptedKey) Serialize(w io.Writer) error {
 	var encodedLength int
 	switch e.Algo {
+	case PubKeyAlgoAEAD:
+		encodedLength = 1 /* AEAD mode */ + len(e.aeadSalt) + len(e.encryptedSession)
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly:
 		encodedLength = int(e.encryptedMPI1.EncodedLength())
 	case PubKeyAlgoElGamal:
@@ -294,7 +326,7 @@ func (e *EncryptedKey) Serialize(w io.Writer) error {
 	case PubKeyAlgoX448:
 		encodedLength = x448.EncodedFieldsLength(e.encryptedSession, e.Version == 6)
 	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
-		encodedLength = int(e.encryptedMPI1.EncodedLength()) + int(e.encryptedMPI2.EncodedLength()) + int(e.encryptedMPI3.EncodedLength()) + 1
+		encodedLength = len(e.ephemeralPublicEcc) + len(e.ephemeralPublicMlKem) + len(e.encryptedSession) + 1
 		if e.Version < 6 {
 			encodedLength += 1
 		}
@@ -347,6 +379,15 @@ func (e *EncryptedKey) Serialize(w io.Writer) error {
 	}
 
 	switch e.Algo {
+	case PubKeyAlgoAEAD:
+		if _, err := w.Write([]byte{byte(e.aeadMode)}); err != nil {
+			return err
+		}
+		if _, err := w.Write(e.aeadSalt); err != nil {
+			return err
+		}
+		_, err := w.Write(e.encryptedSession)
+		return err
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly:
 		_, err := w.Write(e.encryptedMPI1.EncodedBytes())
 		return err
@@ -363,13 +404,13 @@ func (e *EncryptedKey) Serialize(w io.Writer) error {
 		_, err := w.Write(e.encryptedMPI2.EncodedBytes())
 		return err
 	case PubKeyAlgoX25519:
-		err := x25519.EncodeFields(w, e.ephemeralPublicX25519, e.encryptedSession, byte(e.CipherFunc), e.Version == 6)
+		err := x25519.EncodeFields(w, e.ephemeralPublicEcc, e.encryptedSession, byte(e.CipherFunc), e.Version == 6)
 		return err
 	case PubKeyAlgoX448:
-		err := x448.EncodeFields(w, e.ephemeralPublicX448, e.encryptedSession, byte(e.CipherFunc), e.Version == 6)
+		err := x448.EncodeFields(w, e.ephemeralPublicEcc, e.encryptedSession, byte(e.CipherFunc), e.Version == 6)
 		return err
 	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
-		err := mlkem_ecdh.EncodeFields(w, e.encryptedMPI1.EncodedBytes(), e.encryptedMPI2.EncodedBytes(), e.encryptedMPI3.EncodedBytes(), byte(e.CipherFunc), e.Version == 6)
+		err := mlkem_ecdh.EncodeFields(w, e.ephemeralPublicEcc, e.ephemeralPublicMlKem, e.encryptedSession, byte(e.CipherFunc), e.Version == 6)
 		return err
 	default:
 		panic("internal error")
@@ -446,7 +487,7 @@ func SerializeEncryptedKeyAEADwithHiddenOption(w io.Writer, pub *PublicKey, ciph
 
 	var keyBlock []byte
 	switch pub.PubKeyAlgo {
-	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH, PubKeyAlgoAEAD, ExperimentalPubKeyAlgoAEAD:
+	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoElGamal, PubKeyAlgoECDH:
 		lenKeyBlock := len(key) + 2
 		if version < 6 {
 			lenKeyBlock += 1 // cipher type included
@@ -474,13 +515,9 @@ func SerializeEncryptedKeyAEADwithHiddenOption(w io.Writer, pub *PublicKey, ciph
 		return serializeEncryptedKeyX25519(w, config.Random(), buf[:lenHeaderWritten], pub.PublicKey.(*x25519.PublicKey), keyBlock, byte(cipherFunc), version)
 	case PubKeyAlgoX448:
 		return serializeEncryptedKeyX448(w, config.Random(), buf[:lenHeaderWritten], pub.PublicKey.(*x448.PublicKey), keyBlock, byte(cipherFunc), version)
-	case PubKeyAlgoAEAD:
-		return serializeEncryptedKeyAEAD(w, config.Random(), buf[:lenHeaderWritten], pub.PublicKey.(*symmetric.AEADPublicKey), keyBlock)
-	case ExperimentalPubKeyAlgoAEAD:
-		return serializeEncryptedKeyExperimentalAEAD(w, config.Random(), buf[:lenHeaderWritten], pub.PublicKey.(*symmetric.ExperimentalAEADPublicKey), keyBlock, config.AEAD())
 	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
 		return serializeEncryptedKeyMlkem(w, config.Random(), buf[:lenHeaderWritten], pub.PublicKey.(*mlkem_ecdh.PublicKey), keyBlock, byte(cipherFunc), version)
-	case PubKeyAlgoDSA, PubKeyAlgoRSASignOnly, ExperimentalPubKeyAlgoHMAC:
+	case PubKeyAlgoDSA, PubKeyAlgoRSASignOnly:
 		return errors.InvalidArgumentError("cannot encrypt to public key of type " + strconv.Itoa(int(pub.PubKeyAlgo)))
 	}
 
@@ -506,8 +543,12 @@ func SerializeEncryptedKeyWithHiddenOption(w io.Writer, pub *PublicKey, cipherFu
 }
 
 func (e *EncryptedKey) ProxyTransform(instance ForwardingInstance) (transformed *EncryptedKey, err error) {
-	if e.Algo != PubKeyAlgoECDH {
+	if e.Algo != PubKeyAlgoECDH || e.encryptedMPI1 == nil || e.encryptedMPI2 == nil {
 		return nil, errors.InvalidArgumentError("invalid PKESK")
+	}
+
+	if err := instance.Validate(); err != nil {
+		return nil, err
 	}
 
 	if e.KeyId != 0 && e.KeyId != instance.GetForwarderKeyId() {
@@ -533,6 +574,105 @@ func (e *EncryptedKey) ProxyTransform(instance ForwardingInstance) (transformed 
 	}
 
 	return transformed, nil
+}
+
+// SerializeEncryptedKeyPSK serializes an encrypted key packet to w that contains
+// key, encrypted with a persistent symmetric key.
+// Offers the hidden flag option to indicated if the PKESK packet should include a wildcard KeyID.
+// If aeadSupported is set, PKESK v6 is used, otherwise v3.
+// Note: aeadSupported MUST match the value passed to SerializeSymmetricallyEncrypted.
+// If config is nil, sensible defaults will be used.
+func SerializeEncryptedKeyPSK(w io.Writer, psk *PersistentSymmetricKey, cipherFunc CipherFunction, aeadSupported bool, key []byte, config *Config) error {
+	var buf [36]byte // max possible header size is v6
+	lenHeaderWritten := versionSize
+	version := 3
+
+	if aeadSupported {
+		version = 6
+	}
+
+	buf[0] = byte(version)
+
+	if version == 6 {
+		// A one-octet size of the following two fields.
+		buf[1] = byte(keyVersionSize + len(psk.Fingerprint))
+		// A one octet key version number.
+		buf[2] = byte(psk.Version)
+		lenHeaderWritten += keyVersionSize + 1
+		// The fingerprint of the public key
+		copy(buf[lenHeaderWritten:lenHeaderWritten+len(psk.Fingerprint)], psk.Fingerprint)
+		lenHeaderWritten += len(psk.Fingerprint)
+	} else {
+		binary.BigEndian.PutUint64(buf[versionSize:(versionSize+keyIdSize)], psk.KeyId)
+		lenHeaderWritten += keyIdSize
+	}
+	buf[lenHeaderWritten] = byte(psk.PubKeyAlgo)
+	lenHeaderWritten += algorithmSize
+
+	lenKeyBlock := len(key)
+	if version < 6 {
+		lenKeyBlock += 1 // cipher type included
+	}
+	keyBlock := make([]byte, lenKeyBlock)
+	keyOffset := 0
+	if version < 6 {
+		keyBlock[0] = byte(cipherFunc)
+		keyOffset = 1
+	}
+	copy(keyBlock[keyOffset:], key)
+
+	pk, sk, err := psk.PrivateKey.persistentSymmetricKeyFields()
+	if err != nil {
+		return err
+	}
+	packetID := 0xC0 | packetTypeEncryptedKey
+	aeadMode := config.AEAD().Mode()
+	info := []byte{byte(packetID), byte(version), byte(pk.SymmetricAlgorithm), byte(aeadMode)}
+	salt := make([]byte, 32)
+	_, err = io.ReadFull(config.Random(), salt)
+	if err != nil {
+		return err
+	}
+	hkdf := hkdf.New(crypto.SHA512.New, sk.Key, salt, info)
+	keySize := pk.SymmetricAlgorithm.KeySize()
+	ivLength := aeadMode.IvLength()
+	encKey := make([]byte, keySize)
+	iv := make([]byte, ivLength)
+	_, err = hkdf.Read(encKey)
+	if err != nil {
+		return err
+	}
+	_, err = hkdf.Read(iv)
+	if err != nil {
+		return err
+	}
+	modeInstance, err := aeadMode.new(pk.SymmetricAlgorithm.new(encKey))
+	if err != nil {
+		return err
+	}
+	var ciphertext []byte
+	ciphertext = modeInstance.Seal(ciphertext, iv, keyBlock, []byte{})
+
+	packetLen := lenHeaderWritten /* header length */ + 1 /* AEAD mode */ + len(salt) + len(ciphertext)
+
+	err = serializeHeader(w, packetTypeEncryptedKey, packetLen)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(buf[:lenHeaderWritten])
+	if err != nil {
+		return err
+	}
+	_, err = w.Write([]byte{byte(aeadMode)})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(salt)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(ciphertext)
+	return err
 }
 
 func serializeEncryptedKeyRSA(w io.Writer, rand io.Reader, header []byte, pub *rsa.PublicKey, keyBlock []byte) error {
@@ -651,65 +791,6 @@ func serializeEncryptedKeyX448(w io.Writer, rand io.Reader, header []byte, pub *
 	return x448.EncodeFields(w, ephemeralPublicX448, ciphertext, cipherFunc, version == 6)
 }
 
-func serializeEncryptedKeyAEAD(w io.Writer, rand io.Reader, header []byte, pub *symmetric.AEADPublicKey, keyBlock []byte) error {
-	mode := pub.AEADMode
-	iv, ciphertext, err := pub.Encrypt(rand, keyBlock, mode)
-	if err != nil {
-		return errors.InvalidArgumentError("AEAD encryption failed: " + err.Error())
-	}
-
-	packetLen := len(header) /* header length */
-	packetLen += int(len(iv))
-	packetLen += int(len(ciphertext))
-
-	err = serializeHeader(w, packetTypeEncryptedKey, packetLen)
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(header[:])
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(iv[:])
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(ciphertext)
-	return err
-}
-
-func serializeEncryptedKeyExperimentalAEAD(w io.Writer, rand io.Reader, header []byte, pub *symmetric.ExperimentalAEADPublicKey, keyBlock []byte, config *AEADConfig) error {
-	mode := algorithm.AEADMode(config.Mode())
-	iv, ciphertextRaw, err := pub.Encrypt(rand, keyBlock, mode)
-	if err != nil {
-		return errors.InvalidArgumentError("AEAD encryption failed: " + err.Error())
-	}
-
-	ciphertextShortByteString := encoding.NewShortByteString(ciphertextRaw)
-
-	buffer := append([]byte{byte(mode)}, iv...)
-	buffer = append(buffer, ciphertextShortByteString.EncodedBytes()...)
-
-	packetLen := len(header) /* header length */
-	packetLen += int(len(buffer))
-
-	err = serializeHeader(w, packetTypeEncryptedKey, packetLen)
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(header[:])
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(buffer)
-	return err
-}
-
 func checksumKeyMaterial(key []byte) uint16 {
 	var checksum uint16
 	for _, v := range key {
@@ -719,6 +800,9 @@ func checksumKeyMaterial(key []byte) uint16 {
 }
 
 func decodeChecksumKey(msg []byte) (key []byte, err error) {
+	if len(msg) < 2 {
+		return nil, errors.StructuralError("truncated session key")
+	}
 	key = msg[:len(msg)-2]
 	expectedChecksum := uint16(msg[len(msg)-2])<<8 | uint16(msg[len(msg)-1])
 	checksum := checksumKeyMaterial(key)
@@ -741,12 +825,8 @@ func serializeEncryptedKeyMlkem(w io.Writer, rand io.Reader, header []byte, pub 
 		return errors.InvalidArgumentError("ML-KEM + ECDH encryption failed: " + err.Error())
 	}
 
-	ml := encoding.NewOctetArray(mlE)
-	ec := encoding.NewOctetArray(ecE)
-	m := encoding.NewOctetArray(c)
-
 	packetLen := len(header) /* header length */
-	packetLen += int(ec.EncodedLength()) + int(ml.EncodedLength()) + int(m.EncodedLength()) + 1
+	packetLen += len(ecE) + len(mlE) + len(c) + 1
 	if version < 6 {
 		packetLen += 1
 	}
@@ -761,5 +841,5 @@ func serializeEncryptedKeyMlkem(w io.Writer, rand io.Reader, header []byte, pub 
 		return err
 	}
 
-	return mlkem_ecdh.EncodeFields(w, ec.EncodedBytes(), ml.EncodedBytes(), m.EncodedBytes(), cipherFunc, version == 6)
+	return mlkem_ecdh.EncodeFields(w, ecE, mlE, c, cipherFunc, version == 6)
 }

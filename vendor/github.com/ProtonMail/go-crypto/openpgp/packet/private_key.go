@@ -31,7 +31,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/mldsa_eddsa"
 	"github.com/ProtonMail/go-crypto/openpgp/mlkem_ecdh"
 	"github.com/ProtonMail/go-crypto/openpgp/s2k"
-	"github.com/ProtonMail/go-crypto/openpgp/symmetric"
+	"github.com/ProtonMail/go-crypto/openpgp/slhdsa"
 	"github.com/ProtonMail/go-crypto/openpgp/x25519"
 	"github.com/ProtonMail/go-crypto/openpgp/x448"
 	"golang.org/x/crypto/hkdf"
@@ -47,7 +47,8 @@ type PrivateKey struct {
 	s2k           func(out, in []byte)
 	aead          AEADMode // only relevant if S2KAEAD is enabled
 	// An *{rsa|dsa|elgamal|ecdh|ecdsa|ed25519|ed448}.PrivateKey or
-	// crypto.Signer/crypto.Decrypter (Decryptor RSA only).
+	// crypto.Signer/crypto.Decrypter (Decryptor RSA only) or
+	// *packet.PersistentSymmetricKeyPrivateFields (AEAD only).
 	PrivateKey interface{}
 	iv         []byte
 
@@ -170,12 +171,10 @@ func NewSignerPrivateKey(creationTime time.Time, signer interface{}) *PrivateKey
 		pk.PublicKey = *NewEd448PublicKey(creationTime, &pubkey.PublicKey)
 	case ed448.PrivateKey:
 		pk.PublicKey = *NewEd448PublicKey(creationTime, &pubkey.PublicKey)
-	case *symmetric.HMACPrivateKey:
-		pk.PublicKey = *NewHMACPublicKey(creationTime, &pubkey.PublicKey)
-	case *symmetric.ExperimentalHMACPrivateKey:
-		pk.PublicKey = *NewExperimentalHMACPublicKey(creationTime, &pubkey.PublicKey)
 	case *mldsa_eddsa.PrivateKey:
 		pk.PublicKey = *NewMldsaEddsaPublicKey(creationTime, &pubkey.PublicKey)
+	case *slhdsa.PrivateKey:
+		pk.PublicKey = *NewSlhdsaPublicKey(creationTime, &pubkey.PublicKey)
 	default:
 		panic("openpgp: unknown signer type in NewSignerPrivateKey")
 	}
@@ -197,10 +196,6 @@ func NewDecrypterPrivateKey(creationTime time.Time, decrypter interface{}) *Priv
 		pk.PublicKey = *NewX25519PublicKey(creationTime, &priv.PublicKey)
 	case *x448.PrivateKey:
 		pk.PublicKey = *NewX448PublicKey(creationTime, &priv.PublicKey)
-	case *symmetric.AEADPrivateKey:
-		pk.PublicKey = *NewAEADPublicKey(creationTime, &priv.PublicKey)
-	case *symmetric.ExperimentalAEADPrivateKey:
-		pk.PublicKey = *NewExperimentalAEADPublicKey(creationTime, &priv.PublicKey)
 	case *mlkem_ecdh.PrivateKey:
 		pk.PublicKey = *NewMlkemEcdhPublicKey(creationTime, &priv.PublicKey)
 	default:
@@ -211,7 +206,18 @@ func NewDecrypterPrivateKey(creationTime time.Time, decrypter interface{}) *Priv
 }
 
 func (pk *PrivateKey) parse(r io.Reader) (err error) {
-	err = (&pk.PublicKey).parse(r)
+	err = pk.parsePrivateKey(r)
+	if err != nil {
+		return
+	}
+	if pk.PubKeyAlgo == PubKeyAlgoAEAD {
+		return errors.StructuralError("AEAD may only be used with persistent symmetric key packets")
+	}
+	return
+}
+
+func (pk *PrivateKey) parsePrivateKey(r io.Reader) (err error) {
+	err = (&pk.PublicKey).parsePublicKey(r)
 	if err != nil {
 		return
 	}
@@ -281,6 +287,9 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 		if pk.s2kParams.Dummy() {
 			return
 		}
+		if !pk.cipher.IsSupported() {
+			return errors.UnsupportedError("unsupported cipher function in private key")
+		}
 		if pk.s2kParams.Mode() == s2k.Argon2S2K && pk.s2kType != S2KAEAD {
 			return errors.StructuralError("using Argon2 S2K without AEAD is not allowed")
 		}
@@ -316,6 +325,9 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 			return
 		}
 		if v5 && pk.s2kType == S2KAEAD {
+			if pk.aead.IvLength() > len(pk.iv) {
+				return errors.StructuralError("invalid aead IV length for v5 private key")
+			}
 			pk.iv = pk.iv[:pk.aead.IvLength()]
 		}
 	}
@@ -357,10 +369,10 @@ func (pk *PrivateKey) parse(r io.Reader) (err error) {
 				return errors.StructuralError("private key checksum failure")
 			}
 			privateKeyData = privateKeyData[:len(privateKeyData)-2]
-			return pk.parsePrivateKey(privateKeyData)
+			return pk.parsePrivateKeyMaterial(privateKeyData)
 		} else {
 			// No checksum
-			return pk.parsePrivateKey(privateKeyData)
+			return pk.parsePrivateKeyMaterial(privateKeyData)
 		}
 	}
 
@@ -383,11 +395,32 @@ func mod64kHash(d []byte) uint16 {
 
 func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 	contents := bytes.NewBuffer(nil)
-	err = pk.PublicKey.serializeWithoutHeaders(contents)
+	err = pk.serializeWithoutHeaders(contents)
 	if err != nil {
 		return
 	}
-	if _, err = contents.Write([]byte{uint8(pk.s2kType)}); err != nil {
+
+	ptype := packetTypePrivateKey
+	if pk.IsSubkey {
+		ptype = packetTypePrivateSubkey
+	}
+	err = serializeHeader(w, ptype, contents.Len())
+	if err != nil {
+		return
+	}
+	_, err = io.Copy(w, contents)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (pk *PrivateKey) serializeWithoutHeaders(w io.Writer) (err error) {
+	err = pk.PublicKey.serializeWithoutHeaders(w)
+	if err != nil {
+		return
+	}
+	if _, err = w.Write([]byte{uint8(pk.s2kType)}); err != nil {
 		return
 	}
 
@@ -440,10 +473,10 @@ func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 		}
 	}
 	if pk.Version == 5 || (pk.Version == 6 && pk.s2kType != S2KNON) {
-		contents.Write([]byte{uint8(optional.Len())})
+		w.Write([]byte{uint8(optional.Len())})
 	}
 
-	if _, err := io.Copy(contents, optional); err != nil {
+	if _, err := io.Copy(w, optional); err != nil {
 		return err
 	}
 
@@ -452,7 +485,7 @@ func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 		var priv []byte
 		if !pk.Encrypted {
 			buf := bytes.NewBuffer(nil)
-			err = pk.serializePrivateKey(buf)
+			err = pk.serializePrivateKeyMaterial(buf)
 			if err != nil {
 				return err
 			}
@@ -467,24 +500,16 @@ func (pk *PrivateKey) Serialize(w io.Writer) (err error) {
 		}
 
 		if pk.Version == 5 {
-			contents.Write([]byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)})
+			w.Write([]byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)})
 		}
-		contents.Write(priv)
-	}
-
-	ptype := packetTypePrivateKey
-	if pk.IsSubkey {
-		ptype = packetTypePrivateSubkey
-	}
-	err = serializeHeader(w, ptype, contents.Len())
-	if err != nil {
-		return
-	}
-	_, err = io.Copy(w, contents)
-	if err != nil {
-		return
+		w.Write(priv)
 	}
 	return
+}
+
+func serializeAEADPrivateKey(w io.Writer, priv *PersistentSymmetricKeyPrivateFields) error {
+	_, err := w.Write(priv.Key)
+	return err
 }
 
 func serializeRSAPrivateKey(w io.Writer, priv *rsa.PrivateKey) error {
@@ -546,51 +571,35 @@ func serializeEd448PrivateKey(w io.Writer, priv *ed448.PrivateKey) error {
 	return err
 }
 
-func serializeAEADPrivateKey(w io.Writer, priv *symmetric.AEADPrivateKey) (err error) {
-	_, err = w.Write(priv.Key)
-	return
-}
-
-func serializeHMACPrivateKey(w io.Writer, priv *symmetric.HMACPrivateKey) (err error) {
-	_, err = w.Write(priv.Key)
-	return err
-}
-
-func serializeExperimentalAEADPrivateKey(w io.Writer, priv *symmetric.ExperimentalAEADPrivateKey) (err error) {
-	_, err = w.Write(priv.HashSeed[:])
-	if err != nil {
-		return
-	}
-	_, err = w.Write(priv.Key)
-	return
-}
-
-func serializeExperimentalHMACPrivateKey(w io.Writer, priv *symmetric.ExperimentalHMACPrivateKey) (err error) {
-	_, err = w.Write(priv.HashSeed[:])
-	if err != nil {
-		return
-	}
-	_, err = w.Write(priv.Key)
-	return err
-}
-
 // serializeMlkemPrivateKey serializes a ML-KEM + ECC private key according to
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets
 func serializeMlkemPrivateKey(w io.Writer, priv *mlkem_ecdh.PrivateKey) (err error) {
-	if _, err = w.Write(encoding.NewOctetArray(priv.SecretEc).EncodedBytes()); err != nil {
+	if _, err = w.Write(priv.SecretEc); err != nil {
 		return err
 	}
-	_, err = w.Write(encoding.NewOctetArray(priv.SecretMlkemSeed).EncodedBytes())
+	_, err = w.Write(priv.SecretMlkemSeed)
 	return err
 }
 
 // serializeMldsaEddsaPrivateKey serializes a ML-DSA + EdDSA private key according to
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets-2
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets-2
 func serializeMldsaEddsaPrivateKey(w io.Writer, priv *mldsa_eddsa.PrivateKey) error {
-	if _, err := w.Write(encoding.NewOctetArray(priv.SecretEc).EncodedBytes()); err != nil {
+	if _, err := w.Write(priv.SecretEc); err != nil {
 		return err
 	}
-	if _, err := w.Write(encoding.NewOctetArray(priv.SecretMldsaSeed).EncodedBytes()); err != nil {
+	if _, err := w.Write(priv.SecretMldsaSeed); err != nil {
+		return err
+	}
+	return nil
+}
+
+// serializeSlhDsaPrivateKey serializes a SLH-DSA private key.
+func serializeSlhDsaPrivateKey(w io.Writer, priv *slhdsa.PrivateKey) error {
+	marshalledKey, err := priv.SecretSlhdsa.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(marshalledKey); err != nil {
 		return err
 	}
 	return nil
@@ -608,7 +617,10 @@ func (pk *PrivateKey) decrypt(decryptionKey []byte) error {
 	var data []byte
 	switch pk.s2kType {
 	case S2KAEAD:
-		aead := pk.aead.new(block)
+		aead, err := pk.aead.new(block)
+		if err != nil {
+			return err
+		}
 		additionalData, err := pk.additionalData()
 		if err != nil {
 			return err
@@ -651,7 +663,7 @@ func (pk *PrivateKey) decrypt(decryptionKey []byte) error {
 		return errors.InvalidArgumentError("invalid s2k type")
 	}
 
-	err := pk.parsePrivateKey(data)
+	err := pk.parsePrivateKeyMaterial(data)
 	if _, ok := err.(errors.KeyInvalidError); ok {
 		return errors.KeyInvalidError("invalid key parameters")
 	}
@@ -740,7 +752,7 @@ func (pk *PrivateKey) encrypt(key []byte, params *s2k.Params, s2kType S2KType, c
 	}
 
 	priv := bytes.NewBuffer(nil)
-	err := pk.serializePrivateKey(priv)
+	err := pk.serializePrivateKeyMaterial(priv)
 	if err != nil {
 		return err
 	}
@@ -760,7 +772,10 @@ func (pk *PrivateKey) encrypt(key []byte, params *s2k.Params, s2kType S2KType, c
 		if pk.aead == 0 {
 			return errors.StructuralError("aead mode is not set on key")
 		}
-		aead := pk.aead.new(block)
+		aead, err := pk.aead.new(block)
+		if err != nil {
+			return err
+		}
 		additionalData, err := pk.additionalData()
 		if err != nil {
 			return err
@@ -874,8 +889,10 @@ func (pk *PrivateKey) Encrypt(passphrase []byte) error {
 	return pk.EncryptWithConfig(passphrase, config)
 }
 
-func (pk *PrivateKey) serializePrivateKey(w io.Writer) (err error) {
+func (pk *PrivateKey) serializePrivateKeyMaterial(w io.Writer) (err error) {
 	switch priv := pk.PrivateKey.(type) {
+	case *PersistentSymmetricKeyPrivateFields:
+		err = serializeAEADPrivateKey(w, priv)
 	case *rsa.PrivateKey:
 		err = serializeRSAPrivateKey(w, priv)
 	case *dsa.PrivateKey:
@@ -896,26 +913,22 @@ func (pk *PrivateKey) serializePrivateKey(w io.Writer) (err error) {
 		err = serializeEd25519PrivateKey(w, priv)
 	case *ed448.PrivateKey:
 		err = serializeEd448PrivateKey(w, priv)
-	case *symmetric.AEADPrivateKey:
-		err = serializeAEADPrivateKey(w, priv)
-	case *symmetric.HMACPrivateKey:
-		err = serializeHMACPrivateKey(w, priv)
-	case *symmetric.ExperimentalAEADPrivateKey:
-		err = serializeExperimentalAEADPrivateKey(w, priv)
-	case *symmetric.ExperimentalHMACPrivateKey:
-		err = serializeExperimentalHMACPrivateKey(w, priv)
 	case *mlkem_ecdh.PrivateKey:
 		err = serializeMlkemPrivateKey(w, priv)
 	case *mldsa_eddsa.PrivateKey:
 		err = serializeMldsaEddsaPrivateKey(w, priv)
+	case *slhdsa.PrivateKey:
+		err = serializeSlhDsaPrivateKey(w, priv)
 	default:
 		err = errors.InvalidArgumentError("unknown private key type")
 	}
 	return
 }
 
-func (pk *PrivateKey) parsePrivateKey(data []byte) (err error) {
+func (pk *PrivateKey) parsePrivateKeyMaterial(data []byte) (err error) {
 	switch pk.PublicKey.PubKeyAlgo {
+	case PubKeyAlgoAEAD:
+		return pk.parseAEADPrivateKey(data)
 	case PubKeyAlgoRSA, PubKeyAlgoRSASignOnly, PubKeyAlgoRSAEncryptOnly:
 		return pk.parseRSAPrivateKey(data)
 	case PubKeyAlgoDSA:
@@ -936,14 +949,6 @@ func (pk *PrivateKey) parsePrivateKey(data []byte) (err error) {
 		return pk.parseEd25519PrivateKey(data)
 	case PubKeyAlgoEd448:
 		return pk.parseEd448PrivateKey(data)
-	case PubKeyAlgoAEAD:
-		return pk.parseAEADPrivateKey(data)
-	case PubKeyAlgoHMAC:
-		return pk.parseHMACPrivateKey(data)
-	case ExperimentalPubKeyAlgoAEAD:
-		return pk.parseExperimentalAEADPrivateKey(data)
-	case ExperimentalPubKeyAlgoHMAC:
-		return pk.parseExperimentalHMACPrivateKey(data)
 	case PubKeyAlgoMlkem768X25519:
 		if !(pk.Version == 4 || pk.Version >= 6) {
 			return goerrors.New("openpgp: ML-KEM-768+X25519 may only be used with v4 or v6+")
@@ -955,13 +960,31 @@ func (pk *PrivateKey) parsePrivateKey(data []byte) (err error) {
 		}
 		return pk.parseMlkemEcdhPrivateKey(data, 56, mlkem_ecdh.MlKemSeedLen)
 	case PubKeyAlgoMldsa65Ed25519:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: ML-DSA-65+Ed25519 may only be used with v6+")
+		}
 		return pk.parseMldsaEddsaPrivateKey(data, 32, mldsa_eddsa.MlDsaSeedLen)
 	case PubKeyAlgoMldsa87Ed448:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: ML-DSA-87+Ed448 may only be used with v6+")
+		}
 		return pk.parseMldsaEddsaPrivateKey(data, 57, mldsa_eddsa.MlDsaSeedLen)
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: SLH-DSA may only be used with v6+")
+		}
+		return pk.parseSlhdsaPrivateKey(data)
 	default:
 		err = errors.StructuralError("unknown private key type")
 		return
 	}
+}
+
+func (pk *PrivateKey) parseAEADPrivateKey(data []byte) (err error) {
+	aeadPriv := new(PersistentSymmetricKeyPrivateFields)
+	aeadPriv.Key = data
+	pk.PrivateKey = aeadPriv
+	return nil
 }
 
 func (pk *PrivateKey) parseRSAPrivateKey(data []byte) (err error) {
@@ -987,8 +1010,10 @@ func (pk *PrivateKey) parseRSAPrivateKey(data []byte) (err error) {
 
 	rsaPriv.D = new(big.Int).SetBytes(d.Bytes())
 	rsaPriv.Primes = make([]*big.Int, 2)
-	rsaPriv.Primes[0] = new(big.Int).SetBytes(p.Bytes())
-	rsaPriv.Primes[1] = new(big.Int).SetBytes(q.Bytes())
+	// Mirror serializeRSAPrivateKey: Primes[1] is p and Primes[0] is q, so that
+	// Go's Qinv matches u = p^-1 mod q.
+	rsaPriv.Primes[0] = new(big.Int).SetBytes(q.Bytes())
+	rsaPriv.Primes[1] = new(big.Int).SetBytes(p.Bytes())
 	if err := rsaPriv.Validate(); err != nil {
 		return errors.KeyInvalidError(err.Error())
 	}
@@ -1190,7 +1215,9 @@ func (pk *PrivateKey) additionalData() ([]byte, error) {
 	additionalData := bytes.NewBuffer(nil)
 	// Write additional data prefix based on packet type
 	var packetByte byte
-	if pk.PublicKey.IsSubkey {
+	if pk.PubKeyAlgo == PubKeyAlgoAEAD {
+		packetByte = 0xe8 // Must be a persistent symmetric key packet
+	} else if pk.PublicKey.IsSubkey {
 		packetByte = 0xc7
 	} else {
 		packetByte = 0xc5
@@ -1209,7 +1236,9 @@ func (pk *PrivateKey) additionalData() ([]byte, error) {
 
 func (pk *PrivateKey) applyHKDF(inputKey []byte) []byte {
 	var packetByte byte
-	if pk.PublicKey.IsSubkey {
+	if pk.PubKeyAlgo == PubKeyAlgoAEAD {
+		packetByte = 0xe8 // Must be a persistent symmetric key packet
+	} else if pk.PublicKey.IsSubkey {
 		packetByte = 0xc7
 	} else {
 		packetByte = 0xc5
@@ -1221,100 +1250,8 @@ func (pk *PrivateKey) applyHKDF(inputKey []byte) []byte {
 	return encryptionKey
 }
 
-func (pk *PrivateKey) parseAEADPrivateKey(data []byte) (err error) {
-	pubKey := pk.PublicKey.PublicKey.(*symmetric.AEADPublicKey)
-
-	aeadPriv := new(symmetric.AEADPrivateKey)
-	aeadPriv.PublicKey = *pubKey
-
-	priv := make([]byte, pubKey.Cipher.KeySize())
-	copy(priv, data[:])
-	aeadPriv.Key = priv
-	aeadPriv.PublicKey.Key = aeadPriv.Key
-
-	pk.PrivateKey = aeadPriv
-	pk.PublicKey.PublicKey = &aeadPriv.PublicKey
-	return
-}
-
-func (pk *PrivateKey) parseHMACPrivateKey(data []byte) (err error) {
-	pubKey := pk.PublicKey.PublicKey.(*symmetric.HMACPublicKey)
-
-	hmacPriv := new(symmetric.HMACPrivateKey)
-	hmacPriv.PublicKey = *pubKey
-
-	priv := make([]byte, pubKey.Hash.Size())
-	copy(priv, data[:])
-	hmacPriv.Key = priv[:]
-	hmacPriv.PublicKey.Key = hmacPriv.Key
-
-	pk.PrivateKey = hmacPriv
-	pk.PublicKey.PublicKey = &hmacPriv.PublicKey
-	return
-}
-
-func (pk *PrivateKey) parseExperimentalAEADPrivateKey(data []byte) (err error) {
-	pubKey := pk.PublicKey.PublicKey.(*symmetric.ExperimentalAEADPublicKey)
-
-	aeadPriv := new(symmetric.ExperimentalAEADPrivateKey)
-	aeadPriv.PublicKey = *pubKey
-
-	copy(aeadPriv.HashSeed[:], data[:32])
-
-	priv := make([]byte, pubKey.Cipher.KeySize())
-	copy(priv, data[32:])
-	aeadPriv.Key = priv
-	aeadPriv.PublicKey.Key = aeadPriv.Key
-
-	if err = validateExperimentalAEADParameters(aeadPriv); err != nil {
-		return
-	}
-
-	pk.PrivateKey = aeadPriv
-	pk.PublicKey.PublicKey = &aeadPriv.PublicKey
-	return
-}
-
-func (pk *PrivateKey) parseExperimentalHMACPrivateKey(data []byte) (err error) {
-	pubKey := pk.PublicKey.PublicKey.(*symmetric.ExperimentalHMACPublicKey)
-
-	hmacPriv := new(symmetric.ExperimentalHMACPrivateKey)
-	hmacPriv.PublicKey = *pubKey
-
-	copy(hmacPriv.HashSeed[:], data[:32])
-
-	priv := make([]byte, pubKey.Hash.Size())
-	copy(priv, data[32:])
-	hmacPriv.Key = data[32:]
-	hmacPriv.PublicKey.Key = hmacPriv.Key
-
-	if err = validateExperimentalHMACParameters(hmacPriv); err != nil {
-		return
-	}
-
-	pk.PrivateKey = hmacPriv
-	pk.PublicKey.PublicKey = &hmacPriv.PublicKey
-	return
-}
-
-func validateExperimentalAEADParameters(priv *symmetric.ExperimentalAEADPrivateKey) error {
-	return validateCommonSymmetric(priv.HashSeed, priv.PublicKey.BindingHash)
-}
-
-func validateExperimentalHMACParameters(priv *symmetric.ExperimentalHMACPrivateKey) error {
-	return validateCommonSymmetric(priv.HashSeed, priv.PublicKey.BindingHash)
-}
-
-func validateCommonSymmetric(seed [32]byte, bindingHash [32]byte) error {
-	expectedBindingHash := symmetric.ComputeBindingHash(seed)
-	if !bytes.Equal(expectedBindingHash, bindingHash[:]) {
-		return errors.KeyInvalidError("symmetric: wrong binding hash")
-	}
-	return nil
-}
-
 // parseMldsaEddsaPrivateKey parses a ML-DSA + EdDSA private key as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets-2
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets-2
 func (pk *PrivateKey) parseMldsaEddsaPrivateKey(data []byte, ecLen, seedLen int) (err error) {
 	if pk.Version != 6 {
 		return goerrors.New("openpgp: cannot parse non-v6 ML-DSA + EdDSA key")
@@ -1323,18 +1260,17 @@ func (pk *PrivateKey) parseMldsaEddsaPrivateKey(data []byte, ecLen, seedLen int)
 	priv := new(mldsa_eddsa.PrivateKey)
 	priv.PublicKey = *pub
 
-	buf := bytes.NewBuffer(data)
-	ec := encoding.NewEmptyOctetArray(ecLen)
-	if _, err := ec.ReadFrom(buf); err != nil {
-		return err
+	if len(data) != ecLen + seedLen {
+		return errors.StructuralError("wrong ML-DSA+EdDSA key size")
 	}
-	priv.SecretEc = ec.Bytes()
 
-	seed := encoding.NewEmptyOctetArray(seedLen)
-	if _, err := seed.ReadFrom(buf); err != nil {
-		return err
-	}
-	if err = priv.DeriveMlDsaKeys(seed.Bytes(), false); err != nil {
+	ecKey := make([]byte, ecLen)
+	copy(ecKey, data[:ecLen])
+	priv.SecretEc = ecKey
+
+	seed := make([]byte, seedLen)
+	copy(seed, data[ecLen:ecLen+seedLen])
+	if err = priv.DeriveMlDsaKeys(seed, false); err != nil {
 		return err
 	}
 
@@ -1347,24 +1283,23 @@ func (pk *PrivateKey) parseMldsaEddsaPrivateKey(data []byte, ecLen, seedLen int)
 }
 
 // parseMlkemEcdhPrivateKey parses a ML-KEM + ECC private key as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets
 func (pk *PrivateKey) parseMlkemEcdhPrivateKey(data []byte, ecLen, seedLen int) (err error) {
 	pub := pk.PublicKey.PublicKey.(*mlkem_ecdh.PublicKey)
 	priv := new(mlkem_ecdh.PrivateKey)
 	priv.PublicKey = *pub
 
-	buf := bytes.NewBuffer(data)
-	ec := encoding.NewEmptyOctetArray(ecLen)
-	if _, err := ec.ReadFrom(buf); err != nil {
-		return err
+	if len(data) != ecLen + seedLen {
+		return errors.StructuralError("wrong ML-KEM+ECDH key size")
 	}
-	priv.SecretEc = ec.Bytes()
 
-	seed := encoding.NewEmptyOctetArray(seedLen)
-	if _, err := seed.ReadFrom(buf); err != nil {
-		return err
-	}
-	if err = priv.DeriveMlKemKeys(seed.Bytes(), false); err != nil {
+	ecKey := make([]byte, ecLen)
+	copy(ecKey, data[:ecLen])
+	priv.SecretEc = ecKey
+
+	seed := make([]byte, seedLen)
+	copy(seed, data[ecLen:ecLen+seedLen])
+	if err = priv.DeriveMlKemKeys(seed, false); err != nil {
 		return err
 	}
 
@@ -1372,6 +1307,27 @@ func (pk *PrivateKey) parseMlkemEcdhPrivateKey(data []byte, ecLen, seedLen int) 
 		return err
 	}
 	pk.PrivateKey = priv
+
+	return nil
+}
+
+// parseSlhdsaPrivateKey parses a SLH-DSA private key.
+func (pk *PrivateKey) parseSlhdsaPrivateKey(data []byte) (err error) {
+	if pk.Version != 6 {
+		return goerrors.New("openpgp: cannot parse non-v6 SLH-DSA key")
+	}
+	parsedPublicKey := pk.PublicKey.PublicKey.(*slhdsa.PublicKey)
+	parsedPrivateKey := new(slhdsa.PrivateKey)
+	parsedPrivateKey.PublicKey = *parsedPublicKey
+	parsedPrivateKey.SecretSlhdsa, err = parsedPrivateKey.Slhdsa.UnmarshalBinaryPrivateKey(data)
+	if err != nil {
+		return goerrors.New("openpgp: failed to unmarshal SLH-DSA key")
+	}
+
+	if err := slhdsa.Validate(parsedPrivateKey); err != nil {
+		return err
+	}
+	pk.PrivateKey = parsedPrivateKey
 
 	return nil
 }

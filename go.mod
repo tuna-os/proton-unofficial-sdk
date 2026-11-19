@@ -4,20 +4,20 @@ go 1.26.11
 
 require (
 	github.com/ProtonMail/gluon v0.17.1-0.20260225115619-c0f05c033a4a
-	github.com/ProtonMail/go-proton-api v0.4.1-0.20260901104215-8a62023d3e38
-	github.com/ProtonMail/gopenpgp/v2 v2.10.0-proton
+	github.com/ProtonMail/go-proton-api v0.0.0-20261102101905-79fbe0626d9b
+	github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
 	github.com/bradenaw/juniper v0.15.3
 	github.com/emersion/go-message v0.16.0
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/sirupsen/logrus v1.9.4
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 )
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf // indirect
-	github.com/ProtonMail/go-crypto v1.4.1-proton // indirect
+	github.com/ProtonMail/go-crypto v1.5.2-proton // indirect
 	github.com/ProtonMail/go-mime v0.0.0-20230322103455-7d82a3887f2f // indirect
 	github.com/ProtonMail/go-srp v0.0.7 // indirect
 	github.com/PuerkitoBio/goquery v1.12.0 // indirect
@@ -48,7 +48,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	gitlab.com/c0b/go-ordered-json v0.0.0-20201030195603-febf46534d5a // indirect
