@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/ProtonMail/gluon v0.0.0-20261102113653-d871584e5e1e
-	github.com/ProtonMail/go-proton-api v0.0.0-20261102101905-79fbe0626d9b
+	github.com/ProtonMail/go-proton-api v0.1.4
 	github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
 	github.com/bradenaw/juniper v0.15.3
 	github.com/emersion/go-message v0.16.0
