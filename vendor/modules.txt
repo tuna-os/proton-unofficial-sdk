@@ -205,9 +205,10 @@ github.com/go-playground/universal-translator
 # github.com/go-playground/validator/v10 v10.30.1
 ## explicit; go 1.24.0
 github.com/go-playground/validator/v10
-# github.com/go-resty/resty/v2 v2.17.2 => github.com/ProtonMail/resty/v2 v2.0.0-20250929142426-e3dc6308c80b
-## explicit; go 1.16
+# github.com/go-resty/resty/v2 v2.17.2 => github.com/ProtonMail/resty/v2 v2.0.0-20250123061446-1e19d6bc6a10
+## explicit; go 1.20
 github.com/go-resty/resty/v2
+github.com/go-resty/resty/v2/shellescape
 # github.com/goccy/go-json v0.10.5
 ## explicit; go 1.19
 github.com/goccy/go-json
@@ -435,4 +436,4 @@ google.golang.org/protobuf/proto
 google.golang.org/protobuf/reflect/protoreflect
 google.golang.org/protobuf/reflect/protoregistry
 google.golang.org/protobuf/runtime/protoiface
-# github.com/go-resty/resty/v2 => github.com/ProtonMail/resty/v2 v2.0.0-20250929142426-e3dc6308c80b
+# github.com/go-resty/resty/v2 => github.com/ProtonMail/resty/v2 v2.0.0-20250123061446-1e19d6bc6a10

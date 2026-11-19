@@ -64,4 +64,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/go-resty/resty/v2 => github.com/ProtonMail/resty/v2 v2.0.0-20250929142426-e3dc6308c80b
+replace github.com/go-resty/resty/v2 => github.com/ProtonMail/resty/v2 v2.0.0-20250123061446-1e19d6bc6a10
