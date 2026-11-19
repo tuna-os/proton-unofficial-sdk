@@ -123,7 +123,6 @@ ParsePackets:
 			switch p.Algo {
 			case packet.PubKeyAlgoRSA, packet.PubKeyAlgoRSAEncryptOnly, packet.PubKeyAlgoElGamal, packet.PubKeyAlgoECDH,
 				packet.PubKeyAlgoX25519, packet.PubKeyAlgoX448,
-				packet.PubKeyAlgoAEAD, packet.ExperimentalPubKeyAlgoAEAD,
 				packet.PubKeyAlgoMlkem768X25519, packet.PubKeyAlgoMlkem1024X448:
 				break
 			default:
@@ -413,7 +412,7 @@ func (scr *signatureCheckReader) Read(buf []byte) (int, error) {
 				}
 
 				// If signature KeyID matches
-				if scr.md.SignedBy != nil && *sig.IssuerKeyId == scr.md.SignedByKeyId {
+				if scr.md.SignedBy != nil && sig.IssuerKeyId != nil && *sig.IssuerKeyId == scr.md.SignedByKeyId {
 					key := scr.md.SignedBy
 					signatureError := key.PublicKey.VerifySignature(scr.h, sig)
 					if signatureError == nil {

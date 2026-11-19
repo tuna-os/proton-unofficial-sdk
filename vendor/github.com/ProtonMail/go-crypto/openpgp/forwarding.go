@@ -24,8 +24,15 @@ func (e *Entity) NewForwardingEntity(
 		return nil, nil, errors.InvalidArgumentError("unsupported key version")
 	}
 
+	if config == nil {
+		config = &packet.Config{}
+	}
+
 	now := config.Now()
 	i := e.PrimaryIdentity()
+	if i == nil || i.SelfSignature == nil {
+		return nil, nil, errors.InvalidArgumentError("no valid primary identity found")
+	}
 	if e.PrimaryKey.KeyExpired(i.SelfSignature, now) || // primary key has expired
 		i.SelfSignature.SigExpired(now) || // user ID self-signature has expired
 		e.Revoked(now) || // primary key has been revoked
@@ -80,6 +87,10 @@ func (e *Entity) NewForwardingEntity(
 			} else {
 				continue
 			}
+		}
+
+		if forwarderSubKey.PrivateKey == nil {
+			return nil, nil, errors.InvalidArgumentError("forwarder subkey has no private key")
 		}
 
 		forwarderEcdhKey, ok := forwarderSubKey.PrivateKey.PrivateKey.(*ecdh.PrivateKey)

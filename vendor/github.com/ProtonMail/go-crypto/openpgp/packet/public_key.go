@@ -32,7 +32,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/internal/encoding"
 	"github.com/ProtonMail/go-crypto/openpgp/mldsa_eddsa"
 	"github.com/ProtonMail/go-crypto/openpgp/mlkem_ecdh"
-	"github.com/ProtonMail/go-crypto/openpgp/symmetric"
+	"github.com/ProtonMail/go-crypto/openpgp/slhdsa"
 	"github.com/ProtonMail/go-crypto/openpgp/x25519"
 	"github.com/ProtonMail/go-crypto/openpgp/x448"
 	"github.com/cloudflare/circl/kem"
@@ -41,6 +41,7 @@ import (
 	"github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	slhdsaCircl "github.com/cloudflare/circl/sign/slhdsa"
 )
 
 // PublicKey represents an OpenPGP public key. See RFC 4880, section 5.5.2.
@@ -261,63 +262,12 @@ func NewEd448PublicKey(creationTime time.Time, pub *ed448.PublicKey) *PublicKey 
 	return pk
 }
 
-func NewAEADPublicKey(creationTime time.Time, pub *symmetric.AEADPublicKey) *PublicKey {
-	pk := &PublicKey{
-		Version:      4,
-		CreationTime: creationTime,
-		PubKeyAlgo:   PubKeyAlgoAEAD,
-		PublicKey:    pub,
-	}
-
-	return pk
-}
-
-func NewHMACPublicKey(creationTime time.Time, pub *symmetric.HMACPublicKey) *PublicKey {
-	pk := &PublicKey{
-		Version:      4,
-		CreationTime: creationTime,
-		PubKeyAlgo:   PubKeyAlgoHMAC,
-		PublicKey:    pub,
-	}
-
-	return pk
-}
-
-func NewExperimentalAEADPublicKey(creationTime time.Time, pub *symmetric.ExperimentalAEADPublicKey) *PublicKey {
-	pk := &PublicKey{
-		Version:      4,
-		CreationTime: creationTime,
-		PubKeyAlgo:   ExperimentalPubKeyAlgoAEAD,
-		PublicKey:    pub,
-	}
-
-	return pk
-}
-
-func NewExperimentalHMACPublicKey(creationTime time.Time, pub *symmetric.ExperimentalHMACPublicKey) *PublicKey {
-	pk := &PublicKey{
-		Version:      4,
-		CreationTime: creationTime,
-		PubKeyAlgo:   ExperimentalPubKeyAlgoHMAC,
-		PublicKey:    pub,
-	}
-
-	return pk
-}
-
 func NewMlkemEcdhPublicKey(creationTime time.Time, pub *mlkem_ecdh.PublicKey) *PublicKey {
-	mlkemBin, err := pub.PublicMlkem.MarshalBinary()
-	if err != nil {
-		panic(err)
-	}
-
 	pk := &PublicKey{
 		Version:      4,
 		CreationTime: creationTime,
 		PubKeyAlgo:   PublicKeyAlgorithm(pub.AlgId),
 		PublicKey:    pub,
-		p:            encoding.NewOctetArray(pub.PublicPoint),
-		q:            encoding.NewOctetArray(mlkemBin),
 	}
 
 	pk.setFingerprintAndKeyId()
@@ -325,17 +275,23 @@ func NewMlkemEcdhPublicKey(creationTime time.Time, pub *mlkem_ecdh.PublicKey) *P
 }
 
 func NewMldsaEddsaPublicKey(creationTime time.Time, pub *mldsa_eddsa.PublicKey) *PublicKey {
-	publicKeyBytes, err := pub.PublicMldsa.MarshalBinary()
-	if err != nil {
-		panic(err)
-	}
 	pk := &PublicKey{
 		Version:      6,
 		CreationTime: creationTime,
 		PubKeyAlgo:   PublicKeyAlgorithm(pub.AlgId),
 		PublicKey:    pub,
-		p:            encoding.NewOctetArray(pub.PublicPoint),
-		q:            encoding.NewOctetArray(publicKeyBytes),
+	}
+
+	pk.setFingerprintAndKeyId()
+	return pk
+}
+
+func NewSlhdsaPublicKey(creationTime time.Time, pub *slhdsa.PublicKey) *PublicKey {
+	pk := &PublicKey{
+		Version:      6,
+		CreationTime: creationTime,
+		PubKeyAlgo:   PublicKeyAlgorithm(pub.AlgId),
+		PublicKey:    pub,
 	}
 
 	pk.setFingerprintAndKeyId()
@@ -343,6 +299,17 @@ func NewMldsaEddsaPublicKey(creationTime time.Time, pub *mldsa_eddsa.PublicKey) 
 }
 
 func (pk *PublicKey) parse(r io.Reader) (err error) {
+	err = pk.parsePublicKey(r)
+	if err != nil {
+		return
+	}
+	if pk.PubKeyAlgo == PubKeyAlgoAEAD {
+		return errors.StructuralError("AEAD may only be used with persistent symmetric key packets")
+	}
+	return
+}
+
+func (pk *PublicKey) parsePublicKey(r io.Reader) (err error) {
 	// RFC 4880, section 5.5.2
 	var buf [6]byte
 	_, err = readFull(r, buf[:])
@@ -372,6 +339,8 @@ func (pk *PublicKey) parse(r io.Reader) (err error) {
 	pk.PubKeyAlgo = PublicKeyAlgorithm(buf[5])
 	// Ignore four-octet length
 	switch pk.PubKeyAlgo {
+	case PubKeyAlgoAEAD:
+		err = pk.parseAEAD(r)
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
 		err = pk.parseRSA(r)
 	case PubKeyAlgoDSA:
@@ -392,22 +361,31 @@ func (pk *PublicKey) parse(r io.Reader) (err error) {
 		err = pk.parseEd25519(r)
 	case PubKeyAlgoEd448:
 		err = pk.parseEd448(r)
-	case PubKeyAlgoAEAD:
-		err = pk.parseAEAD(r)
-	case PubKeyAlgoHMAC:
-		err = pk.parseHMAC(r)
-	case ExperimentalPubKeyAlgoAEAD:
-		err = pk.parseExperimentalAEAD(r)
-	case ExperimentalPubKeyAlgoHMAC:
-		err = pk.parseExperimentalHMAC(r)
 	case PubKeyAlgoMlkem768X25519:
+		if !(pk.Version == 4 || pk.Version >= 6) {
+			return goerrors.New("openpgp: ML-KEM-768+X25519 may only be used with v4 or v6+")
+		}
 		err = pk.parseMlkemEcdh(r, 32, mlkem768.PublicKeySize)
 	case PubKeyAlgoMlkem1024X448:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: ML-KEM-1024+X448 may only be used with v6+")
+		}
 		err = pk.parseMlkemEcdh(r, 56, mlkem1024.PublicKeySize)
 	case PubKeyAlgoMldsa65Ed25519:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: ML-DSA-65+Ed25519 may only be used with v6+")
+		}
 		err = pk.parseMldsaEddsa(r, 32, mldsa65.PublicKeySize)
 	case PubKeyAlgoMldsa87Ed448:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: ML-DSA-87+Ed448 may only be used with v6+")
+		}
 		err = pk.parseMldsaEddsa(r, 57, mldsa87.PublicKeySize)
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		if pk.Version < 6 {
+			return goerrors.New("openpgp: SLH-DSA may only be used with v6+")
+		}
+		err = pk.parseSlhDsa(r)
 	default:
 		err = errors.UnsupportedError("public key type: " + strconv.Itoa(int(pk.PubKeyAlgo)))
 	}
@@ -457,6 +435,27 @@ func (pk *PublicKey) checkV6Compatibility() error {
 		return errors.StructuralError("cannot generate v6 key with deprecated algorithm: EdDSALegacy")
 	}
 	return nil
+}
+
+// parseAEAD parses AEAD public key material from the given Reader.
+// See draft-ietf-openpgp-persistent-symmetric-keys.
+func (pk *PublicKey) parseAEAD(r io.Reader) (err error) {
+	algoAndFpSeed := make([]byte, 33)
+	_, err = io.ReadFull(r, algoAndFpSeed)
+	if err != nil {
+		return
+	}
+	aead := &PersistentSymmetricKeyPublicFields{
+		SymmetricAlgorithm: CipherFunction(algoAndFpSeed[0]),
+		FingerprintSeed: algoAndFpSeed[1:],
+	}
+	if aead.SymmetricAlgorithm != CipherAES128 &&
+		aead.SymmetricAlgorithm != CipherAES192 &&
+		aead.SymmetricAlgorithm != CipherAES256 {
+		return errors.UnsupportedError(fmt.Sprintf("unknown or weak algorithm: %d", aead.SymmetricAlgorithm))
+	}
+	pk.PublicKey = aead
+	return
 }
 
 // parseRSA parses RSA public key material from the given Reader. See RFC 4880,
@@ -618,6 +617,10 @@ func (pk *PublicKey) parseECDH(r io.Reader) (err error) {
 	if !ok {
 		return errors.UnsupportedError("unsupported ECDH KDF cipher: " + strconv.Itoa(int(pk.kdf.Bytes()[2])))
 	}
+	// RFC 6637, section 7: the KDF hash must be at least as long as the KEK.
+	if kdfHash.HashFunc().Size() < kdfCipher.KeySize() {
+		return errors.StructuralError("ECDH KDF hash output is shorter than the KDF cipher key size")
+	}
 
 	kdf := ecdh.KDF{
 		Version: kdfVersion,
@@ -636,41 +639,6 @@ func (pk *PublicKey) parseECDH(r io.Reader) (err error) {
 	ecdhKey := ecdh.NewPublicKey(c, kdf)
 	err = ecdhKey.UnmarshalPoint(pk.p.Bytes())
 	pk.PublicKey = ecdhKey
-	return
-}
-
-// parseMlkemEcdh parses a ML-KEM + ECC public key as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets
-func (pk *PublicKey) parseMlkemEcdh(r io.Reader, ecLen, kLen int) (err error) {
-	pk.p = encoding.NewEmptyOctetArray(ecLen)
-	if _, err = pk.p.ReadFrom(r); err != nil {
-		return
-	}
-
-	pk.q = encoding.NewEmptyOctetArray(kLen)
-	if _, err = pk.q.ReadFrom(r); err != nil {
-		return
-	}
-
-	pub := &mlkem_ecdh.PublicKey{
-		AlgId:       uint8(pk.PubKeyAlgo),
-		PublicPoint: pk.p.Bytes(),
-	}
-
-	if pub.Curve, err = GetECDHCurveFromAlgID(pk.PubKeyAlgo); err != nil {
-		return err
-	}
-
-	if pub.Mlkem, err = GetMlkemFromAlgID(pk.PubKeyAlgo); err != nil {
-		return err
-	}
-
-	if pub.PublicMlkem, err = pub.Mlkem.UnmarshalBinaryPublicKey(pk.q.Bytes()); err != nil {
-		return err
-	}
-
-	pk.PublicKey = pub
-
 	return
 }
 
@@ -772,123 +740,57 @@ func (pk *PublicKey) parseEd448(r io.Reader) (err error) {
 	return
 }
 
-func (pk *PublicKey) parseAEAD(r io.Reader) (err error) {
-	var algOctets [2]byte
-	_, err = readFull(r, algOctets[:])
-	if err != nil {
+// parseMlkemEcdh parses a ML-KEM + ECC public key as specified in
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets
+func (pk *PublicKey) parseMlkemEcdh(r io.Reader, ecLen, kLen int) (err error) {
+	ecKey := make([]byte, ecLen)
+	if _, err = io.ReadFull(r, ecKey); err != nil {
 		return
 	}
 
-	var fpSeed [32]byte
-	_, err = readFull(r, fpSeed[:])
-	if err != nil {
+	mlkemKey := make([]byte, kLen)
+	if _, err = io.ReadFull(r, mlkemKey); err != nil {
 		return
 	}
 
-	symmetric := &symmetric.AEADPublicKey{
-		Cipher: algorithm.CipherFunction(algOctets[0]),
-		AEADMode: algorithm.AEADMode(algOctets[1]),
-		FpSeed: fpSeed,
+	pub := &mlkem_ecdh.PublicKey{
+		AlgId:       uint8(pk.PubKeyAlgo),
+		PublicPoint: ecKey,
 	}
 
-	pk.PublicKey = symmetric
+	if pub.Curve, err = GetECDHCurveFromAlgID(pk.PubKeyAlgo); err != nil {
+		return err
+	}
+
+	if pub.Mlkem, err = GetMlkemFromAlgID(pk.PubKeyAlgo); err != nil {
+		return err
+	}
+
+	if pub.PublicMlkem, err = pub.Mlkem.UnmarshalBinaryPublicKey(mlkemKey); err != nil {
+		return err
+	}
+
+	pk.PublicKey = pub
+
 	return
-}
-
-func (pk *PublicKey) parseHMAC(r io.Reader) (err error) {
-	var hash [1]byte
-	_, err = readFull(r, hash[:])
-	if err != nil {
-		return
-	}
-	var fpSeed [32]byte
-	_, err = readFull(r, fpSeed[:])
-	if err != nil {
-		return
-	}
-
-	hmacHash, ok := algorithm.HashById[hash[0]]
-	if !ok {
-		return errors.UnsupportedError("unsupported HMAC hash: " + strconv.Itoa(int(hash[0])))
-	}
-
-	symmetric := &symmetric.HMACPublicKey{
-		Hash: hmacHash,
-		FpSeed: fpSeed,
-	}
-
-	pk.PublicKey = symmetric
-	return
-}
-
-func (pk *PublicKey) parseExperimentalAEAD(r io.Reader) (err error) {
-	var cipher [1]byte
-	_, err = readFull(r, cipher[:])
-	if err != nil {
-		return
-	}
-
-	var bindingHash [32]byte
-	_, err = readFull(r, bindingHash[:])
-	if err != nil {
-		return
-	}
-
-	symmetric := &symmetric.ExperimentalAEADPublicKey{
-		Cipher:      algorithm.CipherFunction(cipher[0]),
-		BindingHash: bindingHash,
-	}
-
-	pk.PublicKey = symmetric
-	return
-}
-
-func (pk *PublicKey) parseExperimentalHMAC(r io.Reader) (err error) {
-	var hash [1]byte
-	_, err = readFull(r, hash[:])
-	if err != nil {
-		return
-	}
-	bindingHash, err := readBindingHash(r)
-	if err != nil {
-		return
-	}
-
-	hmacHash, ok := algorithm.HashById[hash[0]]
-	if !ok {
-		return errors.UnsupportedError("unsupported HMAC hash: " + strconv.Itoa(int(hash[0])))
-	}
-
-	symmetric := &symmetric.ExperimentalHMACPublicKey{
-		Hash:        hmacHash,
-		BindingHash: bindingHash,
-	}
-
-	pk.PublicKey = symmetric
-	return
-}
-
-func readBindingHash(r io.Reader) (bindingHash [32]byte, err error) {
-	_, err = readFull(r, bindingHash[:])
-	return bindingHash, err
 }
 
 // parseMldsaEddsa parses a ML-DSA + EdDSA public key as specified in
-// https://www.ietf.org/archive/id/draft-ietf-openpgp-pqc-09.html#name-key-material-packets-2
+// https://www.rfc-editor.org/rfc/rfc9980.html#name-key-material-packets-2
 func (pk *PublicKey) parseMldsaEddsa(r io.Reader, ecLen, dLen int) (err error) {
-	pk.p = encoding.NewEmptyOctetArray(ecLen)
-	if _, err = pk.p.ReadFrom(r); err != nil {
+	ecKey := make([]byte, ecLen)
+	if _, err = io.ReadFull(r, ecKey); err != nil {
 		return
 	}
 
-	pk.q = encoding.NewEmptyOctetArray(dLen)
-	if _, err = pk.q.ReadFrom(r); err != nil {
+	mldsaKey := make([]byte, dLen)
+	if _, err = io.ReadFull(r, mldsaKey); err != nil {
 		return
 	}
 
 	pub := &mldsa_eddsa.PublicKey{
 		AlgId:       uint8(pk.PubKeyAlgo),
-		PublicPoint: pk.p.Bytes(),
+		PublicPoint: ecKey,
 	}
 
 	if pub.Curve, err = GetEdDSACurveFromAlgID(pk.PubKeyAlgo); err != nil {
@@ -899,12 +801,35 @@ func (pk *PublicKey) parseMldsaEddsa(r io.Reader, ecLen, dLen int) (err error) {
 		return err
 	}
 
-	if pub.PublicMldsa, err = pub.Mldsa.UnmarshalBinaryPublicKey(pk.q.Bytes()); err != nil {
+	if pub.PublicMldsa, err = pub.Mldsa.UnmarshalBinaryPublicKey(mldsaKey); err != nil {
 		return err
 	}
 
 	pk.PublicKey = pub
 	return
+}
+
+func (pk *PublicKey) parseSlhDsa(r io.Reader) (err error) {
+	parsedPublicKey := &slhdsa.PublicKey{
+		AlgId: uint8(pk.PubKeyAlgo),
+	}
+
+	if parsedPublicKey.Slhdsa, err = GetSlhdsaSchemeFromAlgID(pk.PubKeyAlgo); err != nil {
+		return err
+	}
+
+	keyLen := parsedPublicKey.Slhdsa.PublicKeySize()
+	key := make([]byte, keyLen)
+	if _, err = io.ReadFull(r, key); err != nil {
+		return err
+	}
+
+	if parsedPublicKey.PublicSlhdsa, err = parsedPublicKey.Slhdsa.UnmarshalBinaryPublicKey(key); err != nil {
+		return err
+	}
+
+	pk.PublicKey = parsedPublicKey
+	return nil
 }
 
 // SerializeForHash serializes the PublicKey to w with the special packet
@@ -964,6 +889,8 @@ func (pk *PublicKey) Serialize(w io.Writer) (err error) {
 func (pk *PublicKey) algorithmSpecificByteCount() uint32 {
 	length := uint32(0)
 	switch pk.PubKeyAlgo {
+	case PubKeyAlgoAEAD:
+		length += 33 // Symmetric algorithm ID and fingerprint seed
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
 		length += uint32(pk.n.EncodedLength())
 		length += uint32(pk.e.EncodedLength())
@@ -994,19 +921,21 @@ func (pk *PublicKey) algorithmSpecificByteCount() uint32 {
 		length += ed25519.PublicKeySize
 	case PubKeyAlgoEd448:
 		length += ed448.PublicKeySize
-	case PubKeyAlgoAEAD:
-		length += 2  // Symmetric and AEAD algorithm octets
-		length += 32 // Fingerprint seed
-	case PubKeyAlgoHMAC:
-		length += 1  // Hash octet
-		length += 32 // Fingerprint seed
-	case ExperimentalPubKeyAlgoAEAD, ExperimentalPubKeyAlgoHMAC:
-		length += 1  // Hash octet
-		length += 32 // Binding hash
-	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448, PubKeyAlgoMldsa65Ed25519,
-		PubKeyAlgoMldsa87Ed448:
-		length += uint32(pk.p.EncodedLength())
-		length += uint32(pk.q.EncodedLength())
+	case PubKeyAlgoMlkem768X25519:
+		length += x25519.KeySize
+		length += mlkem768.PublicKeySize
+	case PubKeyAlgoMlkem1024X448:
+		length += x448.KeySize
+		length += mlkem1024.PublicKeySize
+	case PubKeyAlgoMldsa65Ed25519:
+		length += ed25519.PublicKeySize
+		length += mldsa65.PublicKeySize
+	case PubKeyAlgoMldsa87Ed448:
+		length += ed448.PublicKeySize
+		length += mldsa87.PublicKeySize
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		publicKey := pk.PublicKey.(*slhdsa.PublicKey)
+		length += uint32(publicKey.Slhdsa.PublicKeySize())
 	default:
 		panic("unknown public key algorithm")
 	}
@@ -1035,6 +964,13 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 	}
 
 	switch pk.PubKeyAlgo {
+	case PubKeyAlgoAEAD:
+		publicKey := pk.PublicKey.(*PersistentSymmetricKeyPublicFields)
+		if _, err = w.Write([]byte{byte(publicKey.SymmetricAlgorithm)}); err != nil {
+			return
+		}
+		_, err = w.Write(publicKey.FingerprintSeed)
+		return
 	case PubKeyAlgoRSA, PubKeyAlgoRSAEncryptOnly, PubKeyAlgoRSASignOnly:
 		if _, err = w.Write(pk.n.EncodedBytes()); err != nil {
 			return
@@ -1099,44 +1035,38 @@ func (pk *PublicKey) serializeWithoutHeaders(w io.Writer) (err error) {
 		publicKey := pk.PublicKey.(*ed448.PublicKey)
 		_, err = w.Write(publicKey.Point)
 		return
-	case PubKeyAlgoAEAD:
-		symmKey := pk.PublicKey.(*symmetric.AEADPublicKey)
-		algOctets := [2]byte{symmKey.Cipher.Id(), symmKey.AEADMode.Id()}
-		if _, err = w.Write(algOctets[:]); err != nil {
+	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
+		publicKey := pk.PublicKey.(*mlkem_ecdh.PublicKey)
+		if _, err = w.Write(publicKey.PublicPoint); err != nil {
 			return
 		}
-		_, err = w.Write(symmKey.FpSeed[:])
+		var mlkemBin []byte
+        mlkemBin, err = publicKey.PublicMlkem.MarshalBinary()
+        if err != nil {
+			return
+        }
+		_, err = w.Write(mlkemBin)
 		return
-	case PubKeyAlgoHMAC:
-		symmKey := pk.PublicKey.(*symmetric.HMACPublicKey)
-		hashOctet := [1]byte{symmKey.Hash.Id()}
-		if _, err = w.Write(hashOctet[:]); err != nil {
+	case PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448:
+		publicKey := pk.PublicKey.(*mldsa_eddsa.PublicKey)
+		if _, err = w.Write(publicKey.PublicPoint); err != nil {
 			return
 		}
-		_, err = w.Write(symmKey.FpSeed[:])
+		var mldsaBin []byte
+        mldsaBin, err = publicKey.PublicMldsa.MarshalBinary()
+        if err != nil {
+			return
+        }
+		_, err = w.Write(mldsaBin)
 		return
-	case ExperimentalPubKeyAlgoAEAD:
-		symmKey := pk.PublicKey.(*symmetric.ExperimentalAEADPublicKey)
-		cipherOctet := [1]byte{symmKey.Cipher.Id()}
-		if _, err = w.Write(cipherOctet[:]); err != nil {
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		publicKey := pk.PublicKey.(*slhdsa.PublicKey)
+		var slhdsaBin []byte
+        slhdsaBin, err = publicKey.PublicSlhdsa.MarshalBinary()
+        if err != nil {
 			return
-		}
-		_, err = w.Write(symmKey.BindingHash[:])
-		return
-	case ExperimentalPubKeyAlgoHMAC:
-		symmKey := pk.PublicKey.(*symmetric.ExperimentalHMACPublicKey)
-		hashOctet := [1]byte{symmKey.Hash.Id()}
-		if _, err = w.Write(hashOctet[:]); err != nil {
-			return
-		}
-		_, err = w.Write(symmKey.BindingHash[:])
-		return
-	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448, PubKeyAlgoMldsa65Ed25519,
-		PubKeyAlgoMldsa87Ed448:
-		if _, err = w.Write(pk.p.EncodedBytes()); err != nil {
-			return
-		}
-		_, err = w.Write(pk.q.EncodedBytes())
+        }
+		_, err = w.Write(slhdsaBin)
 		return
 	}
 	return errors.InvalidArgumentError("bad public-key algorithm")
@@ -1214,42 +1144,26 @@ func (pk *PublicKey) VerifySignature(signed hash.Hash, sig *Signature) (err erro
 		return nil
 	case PubKeyAlgoEd25519:
 		ed25519PublicKey := pk.PublicKey.(*ed25519.PublicKey)
-		if !ed25519.Verify(ed25519PublicKey, hashBytes, sig.EdSig) {
+		if !ed25519.Verify(ed25519PublicKey, hashBytes, sig.SigBytes1) {
 			return errors.SignatureError("Ed25519 verification failure")
 		}
 		return nil
 	case PubKeyAlgoEd448:
 		ed448PublicKey := pk.PublicKey.(*ed448.PublicKey)
-		if !ed448.Verify(ed448PublicKey, hashBytes, sig.EdSig) {
+		if !ed448.Verify(ed448PublicKey, hashBytes, sig.SigBytes1) {
 			return errors.SignatureError("ed448 verification failure")
-		}
-		return nil
-	case PubKeyAlgoHMAC:
-		HMACKey := pk.PublicKey.(*symmetric.HMACPublicKey)
-
-		result, err := HMACKey.Verify(hashBytes, sig.HMAC.Bytes())
-		if err != nil {
-			return err
-		}
-		if !result {
-			return errors.SignatureError("HMAC verification failure")
-		}
-		return nil
-	case ExperimentalPubKeyAlgoHMAC:
-		HMACKey := pk.PublicKey.(*symmetric.ExperimentalHMACPublicKey)
-
-		result, err := HMACKey.Verify(hashBytes, sig.HMAC.Bytes())
-		if err != nil {
-			return err
-		}
-		if !result {
-			return errors.SignatureError("HMAC verification failure")
 		}
 		return nil
 	case PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448:
 		mldsaEddsaPublicKey := pk.PublicKey.(*mldsa_eddsa.PublicKey)
-		if !mldsa_eddsa.Verify(mldsaEddsaPublicKey, hashBytes, sig.MldsaSig.Bytes(), sig.EdDSASigR.Bytes()) {
+		if !mldsa_eddsa.Verify(mldsaEddsaPublicKey, hashBytes, sig.SigBytes2, sig.SigBytes1) {
 			return errors.SignatureError("MldsaEddsa verification failure")
+		}
+		return nil
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		slhDsaPublicKey := pk.PublicKey.(*slhdsa.PublicKey)
+		if !slhdsa.Verify(slhDsaPublicKey, hashBytes, sig.SigBytes1) {
+			return errors.SignatureError("Slhdsa verification failure")
 		}
 		return nil
 	default:
@@ -1485,13 +1399,15 @@ func (pk *PublicKey) BitLength() (bitLength uint16, err error) {
 		bitLength = ed25519.PublicKeySize * 8
 	case PubKeyAlgoEd448:
 		bitLength = ed448.PublicKeySize * 8
-	case PubKeyAlgoAEAD:
-		bitLength = uint16(pk.PublicKey.(*symmetric.AEADPublicKey).Cipher.KeySize()) * 8
-	case ExperimentalPubKeyAlgoAEAD:
-		bitLength = 32
-	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448, PubKeyAlgoMldsa65Ed25519,
-		PubKeyAlgoMldsa87Ed448:
-		bitLength = pk.q.BitLength() // TODO: Discuss if this makes sense.
+	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448:
+		publicKey := pk.PublicKey.(*mlkem_ecdh.PublicKey)
+		bitLength = uint16(publicKey.Mlkem.PublicKeySize() * 8)
+	case PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448:
+		publicKey := pk.PublicKey.(*mldsa_eddsa.PublicKey)
+		bitLength = uint16(publicKey.Mldsa.PublicKeySize() * 8)
+	case PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
+		publicKey := pk.PublicKey.(*slhdsa.PublicKey)
+		bitLength = uint16(publicKey.Slhdsa.PublicKeySize() * 8)
 	default:
 		err = errors.InvalidArgumentError("bad public-key algorithm")
 	}
@@ -1535,7 +1451,8 @@ func (pk *PublicKey) KeyExpired(sig *Signature, currentTime time.Time) bool {
 func (pg *PublicKey) IsPQ() bool {
 	switch pg.PubKeyAlgo {
 	case PubKeyAlgoMlkem768X25519, PubKeyAlgoMlkem1024X448,
-		PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448:
+		PubKeyAlgoMldsa65Ed25519, PubKeyAlgoMldsa87Ed448,
+		PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f, PubKeyAlgoSlhdsaShake256s:
 		return true
 	default:
 		return false
@@ -1544,9 +1461,9 @@ func (pg *PublicKey) IsPQ() bool {
 
 func GetMatchingMlkem(algId PublicKeyAlgorithm) (PublicKeyAlgorithm, error) {
 	switch algId {
-	case PubKeyAlgoMldsa65Ed25519:
+	case PubKeyAlgoMldsa65Ed25519, PubKeyAlgoSlhdsaShake128s, PubKeyAlgoSlhdsaShake128f:
 		return PubKeyAlgoMlkem768X25519, nil
-	case PubKeyAlgoMldsa87Ed448:
+	case PubKeyAlgoMldsa87Ed448, PubKeyAlgoSlhdsaShake256s:
 		return PubKeyAlgoMlkem1024X448, nil
 	default:
 		return 0, goerrors.New("packet: unsupported pq public key algorithm")
@@ -1562,6 +1479,20 @@ func GetMlkemFromAlgID(algId PublicKeyAlgorithm) (kem.Scheme, error) {
 		return mlkem1024.Scheme(), nil
 	default:
 		return nil, goerrors.New("packet: unsupported ML-KEM public key algorithm")
+	}
+}
+
+// GetSlhdsaSchemeFromAlgID returns the SLH-DSA instance from the matching KEM
+func GetSlhdsaSchemeFromAlgID(algId PublicKeyAlgorithm) (sign.Scheme, error) {
+	switch algId {
+	case PubKeyAlgoSlhdsaShake128s:
+		return slhdsaCircl.SHAKE_128s.Scheme(), nil
+	case PubKeyAlgoSlhdsaShake128f:
+		return slhdsaCircl.SHAKE_128f.Scheme(), nil
+	case PubKeyAlgoSlhdsaShake256s:
+		return slhdsaCircl.SHAKE_256s.Scheme(), nil
+	default:
+		return nil, goerrors.New("packet: unsupported SLH-DSA public key algorithm")
 	}
 }
 
