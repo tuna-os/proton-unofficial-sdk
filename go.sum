@@ -3,8 +3,8 @@ github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lpr
 github.com/ProtonMail/bcrypt v0.0.0-20210511135022-227b4adcab57/go.mod h1:HecWFHognK8GfRDGnFQbW/LiV7A3MX3gZVs45vk5h8I=
 github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf h1:yc9daCCYUefEs69zUkSzubzjBbL+cmOXgnmt9Fyd9ug=
 github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf/go.mod h1:o0ESU9p83twszAU8LBeJKFAAMX14tISa0yk4Oo5TOqo=
-github.com/ProtonMail/gluon v0.17.1-0.20260225115619-c0f05c033a4a h1:x1Q9Fx8/SKO7JcJQvDCXY61h8SMgrJ2uOIR+nMn/eHo=
-github.com/ProtonMail/gluon v0.17.1-0.20260225115619-c0f05c033a4a/go.mod h1:0wi1rRLBe6aF8UTddl0CT2A4ri7jTBvrHr8RW6X2Ecc=
+github.com/ProtonMail/gluon v0.0.0-20261102113653-d871584e5e1e h1:0e1fRjf82tQ1WyPkbM0ypPilJvlcw4wUF0mfmzn8oiM=
+github.com/ProtonMail/gluon v0.0.0-20261102113653-d871584e5e1e/go.mod h1:i3CLtR5PvXNFuFLS87r/VzsB3qnLhrmVm4SK3vm9Wls=
 github.com/ProtonMail/go-crypto v0.0.0-20230321155629-9a39f2531310/go.mod h1:8TI4H3IbrackdNgv+92dI+rhpCaLqM0IfpgCgenFvRE=
 github.com/ProtonMail/go-crypto v1.5.2-proton h1:chTJ9cVHLn/j+TohzmCg2GKyIZ5yt07ZYgmB2a1Rcdk=
 github.com/ProtonMail/go-crypto v1.5.2-proton/go.mod h1:/RaSu30DaKO4RY+XdV/ACcCcZkGr7AhUIduq5sjzzCo=

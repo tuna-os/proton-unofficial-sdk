@@ -2,6 +2,7 @@ package rfc5322
 
 import (
 	"net/mail"
+	"strings"
 
 	"github.com/ProtonMail/gluon/rfcparser"
 )
@@ -173,9 +174,7 @@ func parseGroup(p *Parser) ([]*mail.Address, bool, error) {
 
 		// This section can optionally be one of the following: mailbox-list / CFWS / obs-group-list. So if
 		// we run out of input, we see semicolon or a double quote we should skip trying to parse this bit.
-		if !(p.parser.Check(rfcparser.TokenTypeEOF) ||
-			p.parser.Check(rfcparser.TokenTypeSemicolon) ||
-			p.parser.Check(rfcparser.TokenTypeDQuote)) {
+		if !p.parser.Check(rfcparser.TokenTypeEOF) && !p.parser.Check(rfcparser.TokenTypeSemicolon) && !p.parser.Check(rfcparser.TokenTypeDQuote) {
 			// Mailbox
 			var parsedFirstMailbox bool
 
@@ -545,7 +544,8 @@ func isDText(tokenType rfcparser.TokenType) bool {
 }
 
 func joinWithSpacingRules(v []parserString) string {
-	result := v[0].String.Value
+	var result strings.Builder
+	result.WriteString(v[0].String.Value)
 
 	prevStrType := v[0].Type
 
@@ -554,18 +554,18 @@ func joinWithSpacingRules(v []parserString) string {
 
 		if prevStrType == parserStringTypeEncoded {
 			if curStrType == parserStringTypeOther {
-				result += " "
+				result.WriteString(" ")
 			}
 		} else if prevStrType != parserStringTypeUnspaced {
 			if curStrType != parserStringTypeUnspaced {
-				result += " "
+				result.WriteString(" ")
 			}
 		}
 
 		prevStrType = curStrType
 
-		result += v[i].String.Value
+		result.WriteString(v[i].String.Value)
 	}
 
-	return result
+	return result.String()
 }
