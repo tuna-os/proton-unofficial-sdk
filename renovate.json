@@ -17,6 +17,18 @@
       "description": "The ProtonMail/resty replace must match the commit go-proton-api builds against; it moves with go-proton-api, not on its own (see #33).",
       "matchPackageNames": ["github.com/ProtonMail/resty/v2", "github.com/go-resty/resty/v2"],
       "enabled": false
+    },
+    {
+      "description": "gopenpgp and go-crypto stay on the -proton builds. The plain build of the same number sorts higher but is different code (no forwarding keys, no decompression limit), so only -proton versions are offered. ignoreUnstable is off because Renovate reads -proton as a pre-release.",
+      "matchPackageNames": ["github.com/ProtonMail/gopenpgp/v2", "github.com/ProtonMail/go-crypto"],
+      "allowedVersions": "/-proton$/",
+      "ignoreUnstable": false
+    },
+    {
+      "description": "gluon is tracked by dev pseudo-version, like go-proton-api: its newest tag, v0.17.0, sorts higher than the pseudo-version and is older code.",
+      "matchPackageNames": ["github.com/ProtonMail/gluon"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
     }
   ]
 }
