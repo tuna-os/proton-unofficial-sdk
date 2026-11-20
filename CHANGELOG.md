@@ -4,7 +4,15 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
-## [Unreleased]
+## [0.1.4] - 2026-11-20
+
+### Changed
+
+- The bundled libraries moved to current upstream: go-crypto 1.5.2-proton
+  (was 1.4.1-proton), gopenpgp 2.11.1-proton (was 2.10.0-proton),
+  `golang.org/x/net` 0.63.0, `golang.org/x/crypto` 0.59.0, and gluon and
+  `golang.org/x/mobile` at newer commits. The Android artifact now asks
+  for kotlinx-serialization-json 1.13.0 (was 1.12.0).
 
 ### Fixed
 
