@@ -5,5 +5,18 @@
   ],
   "postUpdateOptions": [
     "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "description": "go-proton-api is tracked by master pseudo-version; its old v0.1.x tags are older code (see #48).",
+      "matchPackageNames": ["github.com/ProtonMail/go-proton-api"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "The ProtonMail/resty replace must match the commit go-proton-api builds against; it moves with go-proton-api, not on its own (see #33).",
+      "matchPackageNames": ["github.com/ProtonMail/resty/v2", "github.com/go-resty/resty/v2"],
+      "enabled": false
+    }
   ]
 }
