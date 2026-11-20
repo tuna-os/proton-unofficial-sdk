@@ -94,3 +94,25 @@ func TestHTMLToTextKeepsListsAndSkipsHiddenContent(t *testing.T) {
 		t.Fatalf("htmlToText = %q, want %q", got, want)
 	}
 }
+
+// HTML lets the end tag of head be left out. The text after such a head is
+// the message, and must not be hidden with it.
+func TestHTMLToTextKeepsTheBodyAfterAnUnclosedHead(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"end tag left out", "<html><head><meta charset=utf-8><title>t</title><style>p{}</style><body><p>Hello</p></body></html>", "Hello\n"},
+		{"self-closing", "<head/><p>Hello</p>", "Hello\n"},
+		{"upper case, no body tag", "<HEAD><link rel=stylesheet href=x><div>quoted</div><p>reply</p>", "quoted\nreply\n"},
+		{"opened twice, closed once", "<p>a</p><head><head></head><p>b</p>", "a\nb\n"},
+		{"closed head still hidden", "<head><title>t</title></head><p>a</p>", "a\n"},
+		{"title hidden in an unclosed head", "<head><title>hidden</title><p>shown</p>", "shown\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := htmlToText(tc.in); got != tc.want {
+				t.Fatalf("htmlToText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

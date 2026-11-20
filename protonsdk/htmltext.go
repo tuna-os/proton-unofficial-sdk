@@ -13,6 +13,15 @@ var blockTags = map[string]bool{
 	"blockquote": true, "pre": true, "hr": true, "ul": true, "ol": true,
 }
 
+// headTags are the elements HTML allows inside head. Any other start tag
+// ends the head, as it does in a browser: the end tag of head may be left
+// out, and a head that hid everything after it would empty the mail.
+var headTags = map[string]bool{
+	"base": true, "basefont": true, "bgsound": true, "link": true, "meta": true,
+	"noframes": true, "noscript": true, "script": true, "style": true,
+	"template": true, "title": true,
+}
+
 // htmlToText renders an HTML body as plain text for recipients whose
 // preferences ask for text/plain (PGP/Inline, or a contact set to plain).
 // Text content and line structure survive; markup, scripts and styles do
@@ -21,6 +30,7 @@ func htmlToText(body string) string {
 	tokenizer := html.NewTokenizer(strings.NewReader(body))
 	var out strings.Builder
 	skip := 0
+	inHead := false
 	lineBreak := func() {
 		text := out.String()
 		if text != "" && !strings.HasSuffix(text, "\n") {
@@ -34,7 +44,12 @@ func htmlToText(body string) string {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			name, _ := tokenizer.TagName()
 			tag := string(name)
-			if tag == "script" || tag == "style" || tag == "head" {
+			if tag == "head" {
+				inHead = true
+			} else if !headTags[tag] {
+				inHead = false
+			}
+			if tag == "script" || tag == "style" {
 				skip++
 			}
 			if tag == "br" {
@@ -45,14 +60,17 @@ func htmlToText(body string) string {
 		case html.EndTagToken:
 			name, _ := tokenizer.TagName()
 			tag := string(name)
-			if (tag == "script" || tag == "style" || tag == "head") && skip > 0 {
+			if tag == "head" {
+				inHead = false
+			}
+			if (tag == "script" || tag == "style") && skip > 0 {
 				skip--
 			}
 			if blockTags[tag] {
 				lineBreak()
 			}
 		case html.TextToken:
-			if skip > 0 {
+			if skip > 0 || inHead {
 				continue
 			}
 			text := string(tokenizer.Text())
