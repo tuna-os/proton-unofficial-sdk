@@ -16,6 +16,7 @@ github.com/ProtonMail/go-srp v0.0.7 h1:Sos3Qk+th4tQR64vsxGIxYpN3rdnG9Wf9K4ZloC1J
 github.com/ProtonMail/go-srp v0.0.7/go.mod h1:giCp+7qRnMIcCvI6V6U3S1lDDXDQYx2ewJ6F/9wdlJk=
 github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton h1:8QBut2n/q0S5bVqw5bP60Gvn/0j+d+iD5DVVjXqk7OU=
 github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton/go.mod h1:bstMLHsfmrjxolxoGMaZhJRs6Yel/br4P/1dvB9cGto=
+github.com/ProtonMail/gopenpgp/v3 v3.5.2-proton/go.mod h1:vQ//GLpdQ+KRSkLMnzJ11okjcjexRQ24D5XoGuvaIOE=
 github.com/ProtonMail/resty/v2 v2.0.0-20250929142426-e3dc6308c80b h1:0GYNP0odNPJFn1fbfwthcYPd3it0AVntvSaCjh2nlaE=
 github.com/ProtonMail/resty/v2 v2.0.0-20250929142426-e3dc6308c80b/go.mod h1:iiP/OpA0CkcL3IGt1O0+/SIItFUbkkyw5BGXiVdTu+A=
 github.com/PuerkitoBio/goquery v1.12.0 h1:pAcL4g3WRXekcB9AU/y1mbKez2dbY2AajVhtkO8RIBo=

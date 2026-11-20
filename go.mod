@@ -9,7 +9,7 @@ require (
 	// code: no forwarding keys and no limit on decompression.
 	github.com/ProtonMail/go-crypto v1.5.2-proton
 	github.com/ProtonMail/go-proton-api v0.0.0-20261102101905-79fbe0626d9b
-	github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
+	github.com/ProtonMail/gopenpgp/v3 v3.5.2-proton
 	github.com/bradenaw/juniper v0.15.3
 	github.com/emersion/go-message v0.16.0
 	github.com/go-resty/resty/v2 v2.17.2
@@ -17,6 +17,8 @@ require (
 	golang.org/x/mobile v0.0.0-20261117202452-47699113848a
 	golang.org/x/net v0.63.0
 )
+
+require github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect

@@ -61,6 +61,8 @@ github.com/ProtonMail/gopenpgp/v2/constants
 github.com/ProtonMail/gopenpgp/v2/crypto
 github.com/ProtonMail/gopenpgp/v2/helper
 github.com/ProtonMail/gopenpgp/v2/internal
+# github.com/ProtonMail/gopenpgp/v3 v3.5.2-proton
+## explicit; go 1.23.0
 # github.com/PuerkitoBio/goquery v1.12.0
 ## explicit; go 1.25.0
 github.com/PuerkitoBio/goquery
