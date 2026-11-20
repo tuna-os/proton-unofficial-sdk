@@ -12,7 +12,7 @@ github.com/ProtonMail/gluon/pkg/utils
 github.com/ProtonMail/gluon/rfc5322
 github.com/ProtonMail/gluon/rfc822
 github.com/ProtonMail/gluon/rfcparser
-# github.com/ProtonMail/go-crypto v1.5.2-proton
+# github.com/ProtonMail/go-crypto v1.5.2
 ## explicit; go 1.23.0
 github.com/ProtonMail/go-crypto/bitcurves
 github.com/ProtonMail/go-crypto/brainpool
@@ -32,8 +32,6 @@ github.com/ProtonMail/go-crypto/openpgp/elgamal
 github.com/ProtonMail/go-crypto/openpgp/errors
 github.com/ProtonMail/go-crypto/openpgp/internal/algorithm
 github.com/ProtonMail/go-crypto/openpgp/internal/ecc
-github.com/ProtonMail/go-crypto/openpgp/internal/ecc/curve25519
-github.com/ProtonMail/go-crypto/openpgp/internal/ecc/curve25519/field
 github.com/ProtonMail/go-crypto/openpgp/internal/encoding
 github.com/ProtonMail/go-crypto/openpgp/mldsa_eddsa
 github.com/ProtonMail/go-crypto/openpgp/mlkem_ecdh
@@ -54,7 +52,7 @@ github.com/ProtonMail/go-proton-api/server/backend
 # github.com/ProtonMail/go-srp v0.0.7
 ## explicit; go 1.12
 github.com/ProtonMail/go-srp
-# github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
+# github.com/ProtonMail/gopenpgp/v2 v2.11.1
 ## explicit; go 1.23.0
 github.com/ProtonMail/gopenpgp/v2/armor
 github.com/ProtonMail/gopenpgp/v2/constants
@@ -338,8 +336,6 @@ golang.org/x/crypto/hkdf
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/internal/poly1305
 golang.org/x/crypto/sha3
-# golang.org/x/crypto/openpgp v0.1.0-deprecated
-## explicit; go 1.26.0
 # golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90
 ## explicit; go 1.25.0
 golang.org/x/exp/constraints
