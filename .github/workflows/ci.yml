@@ -55,9 +55,22 @@ jobs:
             exit 1
           fi
 
+      - name: Vendor tree matches go.sum
+        # -mod=vendor compares only vendor/modules.txt with go.mod. This
+        # rebuilds the tree from modules Go has checked against go.sum, so a
+        # vendored file that differs from its module fails here.
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          go mod vendor
+          if [ -n "$(git status --porcelain -- go.mod go.sum vendor)" ]; then
+            echo "vendor/ is not what go mod vendor builds from go.mod and go.sum:" >&2
+            git status --short -- go.mod go.sum vendor >&2
+            exit 1
+          fi
+
       - name: Vet
-        # With -mod=vendor, go also refuses a vendor tree that no longer
-        # matches go.mod.
+        # With -mod=vendor, go also refuses a vendor tree whose module list
+        # no longer matches go.mod. The files are checked in the step above.
         env:
           GOFLAGS: -mod=vendor
           GOPROXY: 'off'
