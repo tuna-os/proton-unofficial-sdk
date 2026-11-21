@@ -13,7 +13,7 @@ require (
 	github.com/bradenaw/juniper v0.15.3
 	github.com/emersion/go-message v0.18.2
 	github.com/go-resty/resty/v2 v2.17.2
-	github.com/sirupsen/logrus v1.9.4
+	github.com/sirupsen/logrus v1.10.2
 	golang.org/x/mobile v0.0.0-20261117202452-47699113848a
 	golang.org/x/net v0.63.0
 )
