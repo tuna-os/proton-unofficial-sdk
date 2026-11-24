@@ -4,12 +4,16 @@ go 1.26.11
 
 require (
 	github.com/ProtonMail/gluon v0.0.0-20261102113653-d871584e5e1e
+	// go-crypto and gopenpgp stay on the -proton builds, which go-proton-api
+	// requires. The plain builds of the same numbers sort higher and are other
+	// code: no forwarding keys and no limit on decompression.
+	github.com/ProtonMail/go-crypto v1.5.2-proton
 	github.com/ProtonMail/go-proton-api v0.0.0-20261102101905-79fbe0626d9b
 	github.com/ProtonMail/gopenpgp/v2 v2.11.1-proton
 	github.com/bradenaw/juniper v0.15.3
-	github.com/emersion/go-message v0.16.0
+	github.com/emersion/go-message v0.18.2
 	github.com/go-resty/resty/v2 v2.17.2
-	github.com/sirupsen/logrus v1.9.4
+	github.com/sirupsen/logrus v1.10.2
 	golang.org/x/mobile v0.0.0-20261117202452-47699113848a
 	golang.org/x/net v0.63.0
 )
@@ -17,7 +21,6 @@ require (
 require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/ProtonMail/bcrypt v0.0.0-20211005172633-e235017c1baf // indirect
-	github.com/ProtonMail/go-crypto v1.5.2-proton // indirect
 	github.com/ProtonMail/go-mime v0.0.0-20230322103455-7d82a3887f2f // indirect
 	github.com/ProtonMail/go-srp v0.0.7 // indirect
 	github.com/PuerkitoBio/goquery v1.12.0 // indirect
@@ -28,7 +31,6 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cronokirby/saferith v0.33.0 // indirect
-	github.com/emersion/go-textwrapper v0.0.0-20200911093747-65d896831594 // indirect
 	github.com/emersion/go-vcard v0.0.0-20230331202150-f3d26859ccd3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
