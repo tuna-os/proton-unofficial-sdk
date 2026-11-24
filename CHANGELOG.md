@@ -4,7 +4,17 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (0.x: the API may still change).
 
-## [Unreleased]
+## [0.1.4] - 2026-11-24
+
+### Changed
+
+- The bundled libraries moved to current upstream: go-crypto 1.5.2-proton
+  (was 1.4.1-proton), gopenpgp 2.11.1-proton (was 2.10.0-proton),
+  go-message 0.18.2 (was 0.16.0), logrus 1.10.2 (was 1.9.4),
+  `golang.org/x/net` 0.63.0 (was 0.61.0), `golang.org/x/crypto` 0.59.0
+  (was 0.58.0), and go-proton-api, gluon and `golang.org/x/mobile` at
+  newer commits. The Android artifact now asks for
+  kotlinx-serialization-json 1.13.0 (was 1.12.0).
 
 ### Fixed
 
@@ -21,6 +31,10 @@ All notable changes to this project are listed here. The format follows
   (`send_failed`) until the card pins an active key. It used to go out
   encrypted to the retired key, since any pinned key the API listed was
   taken before the API's own choice.
+- `send`: a message whose HTML has a `head` start tag and no `head` end
+  tag no longer reaches a plain-text recipient (PGP/Inline, or a contact
+  set to plain) as an empty mail. The text after the head was dropped,
+  while `send` reported success and the Sent copy looked complete.
 
 ## [0.1.3] - 2026-11-14
 
