@@ -1,7 +1,7 @@
 # Versions follow the Tuna Mail app (tuna-os/tuna-mail), the
 # wrapper's first consumer, so the two resolve to the same libraries.
 [versions]
-androidGradlePlugin = "9.5.2"
+androidGradlePlugin = "9.5.3"
 kotlin = "2.4.21"
 kotlinxCoroutines = "1.11.0"
 kotlinxSerialization = "1.13.0"
